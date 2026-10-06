@@ -1,262 +1,1982 @@
-<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>MoS Analyzer</title>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-<style>
-:root{color-scheme:dark;--bg:#0c0d10;--pn:#14161b;--ln:#252932;--tx:#d9dde5;--mu:#7b8493;--ac:#7b6cf0;--ok:#a6d94e;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
-*{box-sizing:border-box}
-html,body{height:100%;margin:0;background:var(--bg);color:var(--tx);font:13px/1.45 'IBM Plex Sans',system-ui,sans-serif;font-variant-numeric:tabular-nums}
-#app{display:grid;grid-template-columns:270px 1fr 300px;gap:10px;height:100%;padding:10px}
-.pn{background:var(--pn);border:1px solid var(--ln);border-radius:10px;padding:14px;overflow:auto}
-h3{margin:0 0 8px;font-size:13px;font-weight:600}
-.sec{margin-bottom:18px}
-.mod{display:block;width:100%;text-align:left;background:none;border:1px solid transparent;color:var(--tx);padding:7px 9px;border-radius:6px;font:inherit;cursor:pointer}
-.mod:hover{background:#1b1e25}.mod.on{background:#211e3d;border-color:var(--ac)}
-.mod:disabled{color:var(--mu);cursor:default;background:none}
-.row{margin:9px 0}.row label{display:flex;justify-content:space-between;color:var(--mu);margin-bottom:3px}.row label b{color:var(--tx);font-weight:500}
-input[type=range]{width:100%;accent-color:var(--ac)}
-.seg{display:flex;gap:4px;flex-wrap:wrap}
-.seg button{flex:1;background:#1b1e25;border:1px solid var(--ln);color:var(--tx);padding:6px 4px;border-radius:6px;font:inherit;cursor:pointer;min-width:42px}
-.seg button.on{background:#211e3d;border-color:var(--ac)}
-.btn{width:100%;margin-top:6px;background:#1b1e25;border:1px solid var(--ln);color:var(--tx);padding:7px;border-radius:6px;font:inherit;cursor:pointer}
-#mid{display:flex;flex-direction:column;gap:8px;min-width:0}
-#tabs{display:flex;gap:4px;background:var(--pn);border:1px solid var(--ln);border-radius:10px;padding:4px}
-#tabs button{flex:1;background:none;border:0;color:var(--mu);padding:7px;border-radius:7px;font:inherit;cursor:pointer}
-#tabs button.on{background:#262a33;color:var(--tx)}
-#stage{position:relative;flex:1;min-height:0;background:var(--pn);border:1px solid var(--ln);border-radius:10px}
-canvas{display:block;width:100%;height:100%}
-#leg{display:flex;align-items:center;gap:8px;color:var(--mu);font-size:12px}
-#bar{flex:1;height:10px;border-radius:5px}
-.kv{display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid #1d2028}.kv span:first-child{color:var(--mu)}
-.note{color:var(--mu);font-size:12px;margin:6px 0}
-#hint{position:absolute;left:12px;bottom:10px;color:var(--mu);font-size:12px;pointer-events:none}
-@media(max-width:900px){#app{grid-template-columns:1fr;height:auto}#stage{height:60vh;flex:none}}
-</style>
-<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script></head><body>
-<div id="app">
- <div class="pn" id="L"></div>
- <div id="mid"><div id="tabs"></div><div id="stage"><canvas id="cv"></canvas><canvas id="gl" style="display:none"></canvas><div id="hint"></div></div><div id="leg"></div></div>
- <div class="pn" id="R"></div>
-</div>
-<script>
-const $=s=>document.querySelector(s), cv=$('#cv'), ctx=cv.getContext('2d');
-const NX=24,NY=8, XS=[-1,1,1,-1], YS=[-1,-1,1,1];
-const P={L:200,H:40,t:10,E:200000,nu:.3,anchor:'left',F:500,dir:[0,-1],def:40,field:'vm'};
-const M={sx:80,sy:-20,txy:40,th:0};
-let mod='cant',forces=[],S=null,hn=null,he=null,geo={};
-const fmt=v=>Math.abs(v)>=100?v.toFixed(1):Math.abs(v)>=1?v.toFixed(2):v.toFixed(3);
-const stops=[[68,1,84],[59,82,139],[33,145,140],[94,201,98],[253,231,37]];
-const cmap=t=>{t=Math.max(0,Math.min(1,t))*4;const i=Math.min(3,t|0),f=t-i,a=stops[i],b=stops[i+1];return`rgb(${a.map((v,k)=>Math.round(v+(b[k]-v)*f))})`};
-document.querySelector('#bar')||0;
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <title>MoS Analyzer</title>
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0c0d10;
+        --pn: #14161b;
+        --ln: #252932;
+        --tx: #d9dde5;
+        --mu: #7b8493;
+        --ac: #7b6cf0;
+        --ok: #a6d94e;
+        box-sizing: border-box;
+        padding-top: env(safe-area-inset-top, 0px);
+        padding-bottom: env(safe-area-inset-bottom, 0px);
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        background: var(--bg);
+        color: var(--tx);
+        font:
+          13px/1.45 "IBM Plex Sans",
+          system-ui,
+          sans-serif;
+        font-variant-numeric: tabular-nums;
+      }
+      #app {
+        display: grid;
+        grid-template-columns: 270px 1fr 300px;
+        gap: 10px;
+        height: 100%;
+        padding: 10px;
+      }
+      .pn {
+        background: var(--pn);
+        border: 1px solid var(--ln);
+        border-radius: 10px;
+        padding: 14px;
+        overflow: auto;
+      }
+      h3 {
+        margin: 0 0 8px;
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .sec {
+        margin-bottom: 18px;
+      }
+      .mod {
+        display: block;
+        width: 100%;
+        text-align: left;
+        background: none;
+        border: 1px solid transparent;
+        color: var(--tx);
+        padding: 7px 9px;
+        border-radius: 6px;
+        font: inherit;
+        cursor: pointer;
+      }
+      .mod:hover {
+        background: #1b1e25;
+      }
+      .mod.on {
+        background: #211e3d;
+        border-color: var(--ac);
+      }
+      .mod:disabled {
+        color: var(--mu);
+        cursor: default;
+        background: none;
+      }
+      .row {
+        margin: 9px 0;
+      }
+      .row label {
+        display: flex;
+        justify-content: space-between;
+        color: var(--mu);
+        margin-bottom: 3px;
+      }
+      .row label b {
+        color: var(--tx);
+        font-weight: 500;
+      }
+      input[type="range"] {
+        width: 100%;
+        accent-color: var(--ac);
+      }
+      .seg {
+        display: flex;
+        gap: 4px;
+        flex-wrap: wrap;
+      }
+      .seg button {
+        flex: 1;
+        background: #1b1e25;
+        border: 1px solid var(--ln);
+        color: var(--tx);
+        padding: 6px 4px;
+        border-radius: 6px;
+        font: inherit;
+        cursor: pointer;
+        min-width: 42px;
+      }
+      .seg button.on {
+        background: #211e3d;
+        border-color: var(--ac);
+      }
+      .btn {
+        width: 100%;
+        margin-top: 6px;
+        background: #1b1e25;
+        border: 1px solid var(--ln);
+        color: var(--tx);
+        padding: 7px;
+        border-radius: 6px;
+        font: inherit;
+        cursor: pointer;
+      }
+      #mid {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        min-width: 0;
+      }
+      #tabs {
+        display: flex;
+        gap: 4px;
+        background: var(--pn);
+        border: 1px solid var(--ln);
+        border-radius: 10px;
+        padding: 4px;
+      }
+      #tabs button {
+        flex: 1;
+        background: none;
+        border: 0;
+        color: var(--mu);
+        padding: 7px;
+        border-radius: 7px;
+        font: inherit;
+        cursor: pointer;
+      }
+      #tabs button.on {
+        background: #262a33;
+        color: var(--tx);
+      }
+      #stage {
+        position: relative;
+        flex: 1;
+        min-height: 0;
+        background: var(--pn);
+        border: 1px solid var(--ln);
+        border-radius: 10px;
+      }
+      canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+      }
+      #leg {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--mu);
+        font-size: 12px;
+      }
+      #bar {
+        flex: 1;
+        height: 10px;
+        border-radius: 5px;
+      }
+      .kv {
+        display: flex;
+        justify-content: space-between;
+        padding: 3px 0;
+        border-bottom: 1px solid #1d2028;
+      }
+      .kv span:first-child {
+        color: var(--mu);
+      }
+      .note {
+        color: var(--mu);
+        font-size: 12px;
+        margin: 6px 0;
+      }
+      .mat {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 4px;
+        text-align: center;
+      }
+      .mat div {
+        background: #1b1e25;
+        border-radius: 5px;
+        padding: 5px;
+      }
+      .plane-canvas {
+        height: 150px;
+        margin-top: 8px;
+        border: 1px solid #252932;
+        border-radius: 8px;
+        background: #101218;
+      }
+      #hint {
+        position: absolute;
+        left: 12px;
+        bottom: 10px;
+        color: var(--mu);
+        font-size: 12px;
+        pointer-events: none;
+      }
+      @media (max-width: 900px) {
+        #app {
+          grid-template-columns: 1fr;
+          height: auto;
+        }
+        #stage {
+          height: 60vh;
+          flex: none;
+        }
+      }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  </head>
+  <body>
+    <div id="app">
+      <div class="pn" id="L"></div>
+      <div id="mid">
+        <div id="tabs"></div>
+        <div id="stage">
+          <canvas id="cv"></canvas
+          ><canvas id="gl" style="display: none"></canvas>
+          <div id="hint"></div>
+        </div>
+        <div id="leg"></div>
+      </div>
+      <div class="pn" id="R"></div>
+    </div>
+    <script>
+      const $ = (s) => document.querySelector(s),
+        cv = $("#cv"),
+        ctx = cv.getContext("2d");
+      let NX = 24,
+        NY = 8;
+      const XS = [-1, 1, 1, -1],
+        YS = [-1, -1, 1, 1];
+      const P = {
+        L: 200,
+        H: 40,
+        t: 10,
+        E: 200000,
+        nu: 0.3,
+        nx: 24,
+        ny: 8,
+        anchor: "left",
+        F: 500,
+        dir: [0, -1],
+        def: 40,
+        field: "vm",
+        complexity: 5,
+      };
+      const M = { sx: 80, sy: -20, txy: 40, th: 0 };
+      const PL2 = { nx: 0, ny: 0, nz: 1 };
+      let mod = "cant",
+        forces = [],
+        S = null,
+        hn = null,
+        he = null,
+        geo = {};
+      const fmt = (v) =>
+        Math.abs(v) >= 100
+          ? v.toFixed(1)
+          : Math.abs(v) >= 1
+            ? v.toFixed(2)
+            : v.toFixed(3);
+      const stops = [
+        [68, 1, 84],
+        [59, 82, 139],
+        [33, 145, 140],
+        [94, 201, 98],
+        [253, 231, 37],
+      ];
+      const cmap = (t) => {
+        t = Math.max(0, Math.min(1, t)) * 4;
+        const i = Math.min(3, t | 0),
+          f = t - i,
+          a = stops[i],
+          b = stops[i + 1];
+        return `rgb(${a.map((v, k) => Math.round(v + (b[k] - v) * f))})`;
+      };
+      const clampInt = (v, min, max) =>
+        Math.max(min, Math.min(max, Math.round(v)));
+      function defaultForce2() {
+        return { n: NX + NY * (NX + 1), fx: 0, fy: -800 };
+      }
+      function syncMesh2(resetLoads = false) {
+        const nx = clampInt(P.nx, 6, 36),
+          ny = clampInt(P.ny, 2, 14),
+          changed = nx !== NX || ny !== NY;
+        P.nx = nx;
+        P.ny = ny;
+        if (!changed) return;
+        NX = nx;
+        NY = ny;
+        hn = he = null;
+        if (resetLoads) forces = [defaultForce2()];
+      }
+      function setMesh2() {
+        syncMesh2(true);
+        run();
+      }
+      document.querySelector("#bar") || 0;
 
-// ---------- FEM: bilinear Q4, plane stress ----------
-function Bm(x,y,a,b){const B=[0,1,2].map(()=>new Array(8).fill(0));
- for(let i=0;i<4;i++){const dx=XS[i]*(1+YS[i]*y)/4/a,dy=YS[i]*(1+XS[i]*x)/4/b;B[0][2*i]=dx;B[1][2*i+1]=dy;B[2][2*i]=dy;B[2][2*i+1]=dx}return B}
-function solve(){
- const a=P.L/NX/2,b=P.H/NY/2,c=P.E/(1-P.nu**2),D=[[c,c*P.nu,0],[c*P.nu,c,0],[0,0,c*(1-P.nu)/2]],g=1/Math.sqrt(3);
- const K=Array.from({length:8},()=>new Array(8).fill(0));
- for(const gx of[-g,g])for(const gy of[-g,g]){const B=Bm(gx,gy,a,b);
-  for(let i=0;i<8;i++)for(let j=0;j<8;j++){let s=0;for(let k=0;k<3;k++)for(let l=0;l<3;l++)s+=B[k][i]*D[k][l]*B[l][j];K[i][j]+=s*a*b*P.t}}
- const W=NX+1,nn=W*(NY+1),nd=2*nn,Kg=new Float64Array(nd*nd),en=[];
- for(let ey=0;ey<NY;ey++)for(let ex=0;ex<NX;ex++){const n0=ex+ey*W,n=[n0,n0+1,n0+W+1,n0+W];en.push(n);
-  const d=n.flatMap(k=>[2*k,2*k+1]);for(let i=0;i<8;i++)for(let j=0;j<8;j++)Kg[d[i]*nd+d[j]]+=K[i][j]}
- const fixed=new Uint8Array(nd);
- for(let j=0;j<=NY;j++)for(let i=0;i<=NX;i++){const f={left:i==0,right:i==NX,bottom:j==0,top:j==NY}[P.anchor];if(f){fixed[2*(i+j*W)]=1;fixed[2*(i+j*W)+1]=1}}
- const fr=[];for(let k=0;k<nd;k++)if(!fixed[k])fr.push(k);
- const m=fr.length,A=new Float64Array(m*m),f=new Float64Array(m),pos=new Int32Array(nd).fill(-1);fr.forEach((k,i)=>pos[k]=i);
- for(let i=0;i<m;i++)for(let j=0;j<m;j++)A[i*m+j]=Kg[fr[i]*nd+fr[j]];
- for(const q of forces){if(pos[2*q.n]>=0)f[pos[2*q.n]]+=q.fx;if(pos[2*q.n+1]>=0)f[pos[2*q.n+1]]+=q.fy}
- for(let k=0;k<m;k++){const p=A[k*m+k];for(let i=k+1;i<m;i++){const r=A[i*m+k]/p;if(!r)continue;for(let j=k;j<m;j++)A[i*m+j]-=r*A[k*m+j];f[i]-=r*f[k]}}
- const x=new Float64Array(m);for(let i=m-1;i>=0;i--){let s=f[i];for(let j=i+1;j<m;j++)s-=A[i*m+j]*x[j];x[i]=s/A[i*m+i]}
- const u=new Float64Array(nd);fr.forEach((k,i)=>u[k]=x[i]);
- const B0=Bm(0,0,a,b),el=en.map(n=>{const ue=n.flatMap(k=>[u[2*k],u[2*k+1]]),e=B0.map(r=>r.reduce((s,v,i)=>s+v*ue[i],0)),
-  s=D.map(r=>r.reduce((q,v,i)=>q+v*e[i],0)),[sx,sy,tx]=s,av=(sx+sy)/2,R=Math.hypot((sx-sy)/2,tx);
-  return{n,e,sx,sy,tx,vm:Math.sqrt(sx*sx-sx*sy+sy*sy+3*tx*tx),s1:av+R,s2:av-R,R,av,thp:.5*Math.atan2(2*tx,sx-sy)*180/Math.PI,
-   um:n.reduce((q,k)=>q+Math.hypot(u[2*k],u[2*k+1]),0)/4}});
- S={u,el,fixed,W};
-}
-// ---------- drawing ----------
-function size(){const r=devicePixelRatio||1,w=cv.clientWidth,h=cv.clientHeight;if(cv.width!=w*r||cv.height!=h*r){cv.width=w*r;cv.height=h*r}ctx.setTransform(r,0,0,r,0,0);return[w,h]}
-function pt(i,j,def){const k=i+j*(NX+1),x=i*P.L/NX,y=j*P.H/NY,u=S?S.u[2*k]*def:0,v=S?S.u[2*k+1]*def:0;return[geo.ox+(x+u)*geo.s,geo.oy-(y+v)*geo.s]}
-function drawBeam(){
- const[w,h]=size();ctx.clearRect(0,0,w,h);
- geo.s=Math.min(w*.78/P.L,h*.6/P.H);geo.ox=(w-P.L*geo.s)/2;geo.oy=h/2+P.H*geo.s/2;
- const F=P.field,vals=S.el.map(e=>F=='u'?e.um:e[F]);let lo=Math.min(...vals),hi=Math.max(...vals);if(F=='vm'||F=='u')lo=Math.min(lo,0);if(hi-lo<1e-9)hi=lo+1;
- S.el.forEach((e,q)=>{const i=q%NX,j=(q/NX)|0,ps=[pt(i,j,P.def),pt(i+1,j,P.def),pt(i+1,j+1,P.def),pt(i,j+1,P.def)];
-  ctx.beginPath();ps.forEach((p,k)=>k?ctx.lineTo(...p):ctx.moveTo(...p));ctx.closePath();ctx.fillStyle=cmap((vals[q]-lo)/(hi-lo));ctx.fill();
-  ctx.strokeStyle=q===he?'#fff':'rgba(0,0,0,.28)';ctx.lineWidth=q===he?2:1;ctx.stroke()});
- // nodes + anchors
- for(let j=0;j<=NY;j++)for(let i=0;i<=NX;i++){const k=i+j*(NX+1),p=pt(i,j,P.def);
-  if(S.fixed[2*k]){ctx.fillStyle='#e5484d';ctx.fillRect(p[0]-3,p[1]-3,6,6)}
-  else{ctx.beginPath();ctx.arc(p[0],p[1],k===hn?5:2,0,7);ctx.fillStyle=k===hn?'#fff':'rgba(255,255,255,.35)';ctx.fill()}}
- // forces
- for(const q of forces){const i=q.n%(NX+1),j=(q.n/(NX+1))|0,p=pt(i,j,P.def),m=Math.hypot(q.fx,q.fy),dx=q.fx/m,dy=-q.fy/m,L=38;
-  const x0=p[0]-dx*L,y0=p[1]-dy*L;ctx.strokeStyle=ctx.fillStyle='#ff9f43';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(x0,y0);ctx.lineTo(...p);ctx.stroke();
-  ctx.beginPath();ctx.moveTo(...p);ctx.lineTo(p[0]-dx*9-dy*5,p[1]-dy*9+dx*5);ctx.lineTo(p[0]-dx*9+dy*5,p[1]-dy*9-dx*5);ctx.fill();
-  ctx.font='11px IBM Plex Sans';ctx.fillText(fmt(m)+' N',x0+(dx<0?6:-30),y0-6)}
- const u=F=='u'?'mm':'MPa';$('#leg').innerHTML=`<span>${fmt(lo)}</span><div id="bar" style="background:linear-gradient(90deg,${[0,.25,.5,.75,1].map(t=>cmap(t)).join(',')})"></div><span>${fmt(hi)} ${u}</span>`;
-}
-function drawMohr(c,w,h,sx,sy,tx,th){
- c.clearRect(0,0,w,h);const av=(sx+sy)/2,d=(sx-sy)/2,R=Math.hypot(d,tx),s=Math.min(w*.42/(R+Math.abs(av)+1),h*.4/(R+1)),x0=w/2-av*s,y0=h/2,X=v=>x0+v*s,Y=v=>y0+v*s;
- c.strokeStyle='#3a3f4b';c.lineWidth=1;c.beginPath();c.moveTo(8,y0);c.lineTo(w-8,y0);c.moveTo(x0,8);c.lineTo(x0,h-8);c.stroke();
- c.fillStyle='#7b8493';c.font='11px IBM Plex Sans';c.fillText('σ',w-16,y0-5);c.fillText('τ (down +)',x0+5,16);
- c.strokeStyle='#7b6cf0';c.lineWidth=2;c.beginPath();c.arc(X(av),y0,R*s,0,7);c.stroke();
- const t=th*Math.PI/90,c2=Math.cos(t),s2=Math.sin(t),a1=av+d*c2+tx*s2,a2=av-d*c2-tx*s2,tt=-d*s2+tx*c2;
- const dot=(px,py,col,l)=>{c.fillStyle=col;c.beginPath();c.arc(X(px),Y(py),4,0,7);c.fill();c.fillText(l,X(px)+6,Y(py)-6)};
- c.strokeStyle='#cfd3dc';c.lineWidth=1;c.beginPath();c.moveTo(X(a1),Y(tt));c.lineTo(X(a2),Y(-tt));c.stroke();
- dot(av+R,0,'#a6d94e','σ1');dot(av-R,0,'#a6d94e','σ2');dot(a1,tt,'#ff9f43',"x'");dot(a2,-tt,'#ff9f43',"y'");
- return{a1,a2,tt,R,av};
-}
-// ---------- UI ----------
-const MODS=[['cant','Cantilever 2D (plane stress)'],['3d','Cantilever 3D (hex8)'],['mohr',"Mohr's circle"],['',"Axial bar"],['',"Truss"]];
-function slider(l,k,o,min,max,st,u,cb){const r=document.createElement('div');r.className='row';
- r.innerHTML=`<label>${l}<b>${o[k]} ${u}</b></label><input type=range min=${min} max=${max} step=${st} value=${o[k]}>`;
- r.querySelector('input').oninput=e=>{o[k]=+e.target.value;r.querySelector('b').textContent=o[k]+' '+u;cb()};return r}
-function seg(opts,cur,cb){const d=document.createElement('div');d.className='seg';
- opts.forEach(([v,l])=>{const b=document.createElement('button');b.textContent=l;b.className=String(cur())==String(v)?'on':'';b.onclick=()=>{cb(v);[...d.children].forEach(x=>x.className='');b.className='on'};d.append(b)});return d}
-function left(){const L=$('#L');L.innerHTML='<div class="sec"><h3>Modules</h3></div>';
- MODS.forEach(([id,n])=>{const b=document.createElement('button');b.className='mod'+(id==mod?' on':'');b.textContent=n+(id?'':' (planned)');b.disabled=!id;b.onclick=()=>{mod=id;he=hn=null;left();tabs();run()};L.firstChild.append(b)});
- const p=document.createElement('div');p.className='sec';L.append(p);
- if(mod=='cant'){p.innerHTML='<h3>Geometry & material</h3>';
-  p.append(slider('Length','L',P,100,400,10,'mm',run),slider('Depth','H',P,10,100,2,'mm',run),slider('Thickness','t',P,2,40,1,'mm',run),slider('Young’s modulus','E',P,1000,300000,1000,'MPa',run),slider('Poisson ratio','nu',P,0.05,0.45,0.01,'',run));
-  p.insertAdjacentHTML('beforeend','<h3 style="margin-top:16px">Anchor (fixed edge)</h3>');
-  p.append(seg([['left','Left'],['right','Right'],['top','Top'],['bottom','Bottom']],()=>P.anchor,v=>{P.anchor=v;run()}));
-  p.insertAdjacentHTML('beforeend','<h3 style="margin-top:16px">Load</h3>');
-  p.append(seg([['0,1','↑'],['0,-1','↓'],['-1,0','←'],['1,0','→']],()=>P.dir.join(','),v=>P.dir=v.split(',').map(Number)));
-  p.append(slider('Force per click','F',P,50,5000,50,'N',()=>{}),slider('Deformation scale','def',P,1,300,1,'×',draw));
-  const b=document.createElement('button');b.className='btn';b.textContent='Clear loads';b.onclick=()=>{forces=[];run()};p.append(b);
-  p.insertAdjacentHTML('beforeend','<p class="note">Plane stress, Q4 elements, mm–N–MPa. Click a node to add a force; right-click to remove.</p>');
- }else if(mod=='3d'){left3(p)}else{p.innerHTML='<h3>Stress state</h3>';
-  p.append(slider('σx','sx',M,-200,200,1,'MPa',run),slider('σy','sy',M,-200,200,1,'MPa',run),slider('τxy','txy',M,-150,150,1,'MPa',run),slider('Plane angle θ','th',M,-90,90,1,'°',run));}
-}
-function tabs(){const T=$('#tabs');T.innerHTML='';
- if(mod!='cant'&&mod!='3d'){T.style.display='none';return}T.style.display='flex';
- const O=mod=='3d'?Q:P;(mod=='3d'?[['vm','von Mises'],['sx','σxx'],['sy','σyy'],['sz','σzz'],['u','Displacement']]:[['vm','von Mises'],['sx','σx'],['sy','σy'],['tx','τxy'],['u','Displacement']]).forEach(([k,n])=>{const b=document.createElement('button');b.textContent=n;b.className=O.field==k?'on':'';b.onclick=()=>{O.field=k;tabs();draw()};T.append(b)})}
-function right(){const R=$('#R'),kv=(a,b)=>`<div class="kv"><span>${a}</span><span>${b}</span></div>`;
- if(mod=='3d'){right3(R,kv);return}
- if(mod=='cant'){const el=S.el,top=el.reduce((a,b)=>b.vm>a.vm?b:a),sel=he!=null?el[he]:top,ti=el.indexOf(top),umax=Math.max(...[...Array((NX+1)*(NY+1)).keys()].map(k=>Math.hypot(S.u[2*k],S.u[2*k+1])));
-  R.innerHTML=`<div class="sec"><h3>Summary</h3>${kv('Loads applied',forces.length)}${kv('Max von Mises',fmt(top.vm)+' MPa')}${kv('Max |σx|',fmt(Math.max(...el.map(e=>Math.abs(e.sx))))+' MPa')}${kv('Max displacement',fmt(umax)+' mm')}
-  <p class="note">${forces.length?`Peak von Mises sits in element column ${ti%NX+1}/${NX}, row ${((ti/NX)|0)+1}/${NY} (from bottom-left).`:'No loads yet — click nodes in the plot.'}</p></div>
-  <div class="sec"><h3>${he!=null?'Hovered element':'Peak-stress element'}</h3>${kv('σx / σy / τxy',[sel.sx,sel.sy,sel.tx].map(fmt).join(' / '))}${kv('εx / εy / γxy (×10⁻⁶)',sel.e.map(v=>(v*1e6).toFixed(0)).join(' / '))}${kv('σ1 / σ2',fmt(sel.s1)+' / '+fmt(sel.s2))}${kv('τmax',fmt(sel.R))}${kv('θp',sel.thp.toFixed(1)+'°')}${kv('von Mises',fmt(sel.vm))}
-  <canvas id="mc" style="height:170px;margin-top:8px"></canvas></div>`;
-  const c=$('#mc'),r=devicePixelRatio||1;c.width=c.clientWidth*r;c.height=170*r;const x=c.getContext('2d');x.setTransform(r,0,0,r,0,0);drawMohr(x,c.clientWidth,170,sel.sx,sel.sy,sel.tx,0);
- }else{const av=(M.sx+M.sy)/2,Rr=Math.hypot((M.sx-M.sy)/2,M.txy);
-  R.innerHTML=`<div class="sec"><h3>Principal state</h3>${kv('σ1',fmt(av+Rr)+' MPa')}${kv('σ2',fmt(av-Rr)+' MPa')}${kv('τmax',fmt(Rr)+' MPa')}${kv('θp',(.5*Math.atan2(2*M.txy,M.sx-M.sy)*180/Math.PI).toFixed(1)+'°')}${kv('Centre',fmt(av)+' MPa')}</div><div class="sec" id="tr"><h3>Rotated plane (θ = ${M.th}°)</h3></div>`}
-}
-function hint(){$('#hint').textContent=mod=='3d'?'Drag: orbit · Wheel: zoom · Click a surface node: force · Shift+click: remove':mod=='cant'?'Click a node: apply force · Right-click: remove · Hover: element tensor':"Drag the sliders — the orange line is the plane rotated by θ"}
-function draw(){
- cv.style.display=mod=='3d'?'none':'block';$('#gl').style.display=mod=='3d'?'block':'none';
- if(mod=='3d'){draw3();right()}
- else if(mod=='cant'){drawBeam();right()}
- else{const[w,h]=size(),o=drawMohr(ctx,w,h,M.sx,M.sy,M.txy,M.th);right();
-  $('#tr').insertAdjacentHTML('beforeend',`<div class="kv"><span>σx'</span><span>${fmt(o.a1)} MPa</span></div><div class="kv"><span>σy'</span><span>${fmt(o.a2)} MPa</span></div><div class="kv"><span>τx'y'</span><span>${fmt(o.tt)} MPa</span></div>`);
-  $('#leg').innerHTML='';}
- hint()}
-function run(){if(mod=='cant')solve();if(mod=='3d')solve3();draw()}
-// ---------- interaction ----------
-function pick(ev){const r=cv.getBoundingClientRect(),mx=ev.clientX-r.left,my=ev.clientY-r.top;let bn=null,bd=11,be=null,ed=1e9;
- for(let j=0;j<=NY;j++)for(let i=0;i<=NX;i++){const p=pt(i,j,P.def),d=Math.hypot(p[0]-mx,p[1]-my);if(d<bd){bd=d;bn=i+j*(NX+1)}}
- S.el.forEach((e,q)=>{const i=q%NX,j=(q/NX)|0,a=pt(i,j,P.def),b=pt(i+1,j+1,P.def),d=Math.hypot((a[0]+b[0])/2-mx,(a[1]+b[1])/2-my);if(d<ed){ed=d;be=q}});
- return{bn,be:ed<geo.s*P.L/NX*1.2?be:null}}
-cv.onmousemove=e=>{if(mod!='cant')return;const p=pick(e);if(p.bn!==hn||p.be!==he){hn=p.bn;he=p.be;draw()}};
-cv.onclick=e=>{if(mod!='cant')return;const{bn}=pick(e);if(bn==null||S.fixed[2*bn])return;
- const[dx,dy]=P.dir,q=forces.find(f=>f.n==bn);if(q){q.fx+=dx*P.F;q.fy+=dy*P.F;if(!q.fx&&!q.fy)forces.splice(forces.indexOf(q),1)}else forces.push({n:bn,fx:dx*P.F,fy:dy*P.F});run()};
-cv.oncontextmenu=e=>{e.preventDefault();if(mod!='cant')return;const{bn}=pick(e);forces=forces.filter(f=>f.n!=bn);run()};
-addEventListener('resize',draw);
-left();tabs();forces=[{n:NX+(NY)*(NX+1),fx:0,fy:-800}];run();
-</script><script>
-// ---------- 3D: hex8 solid cantilever, matrix-free PCG ----------
-const Q={L:240,H:40,W:40,E:200000,nu:.3,anchor:'left',F:500,dir:[0,-1,0],def:40,field:'vm'};
-const NX3=12,NY3=4,NZ3=4,W3=NX3+1,V3=W3*(NY3+1),NN3=V3*(NZ3+1);
-const HX=[-1,1,1,-1,-1,1,1,-1],HY=[-1,-1,1,1,-1,-1,1,1],HZ=[-1,-1,-1,-1,1,1,1,1];
-const FACES=[[0,3,2,1],[4,5,6,7],[0,1,5,4],[3,7,6,2],[0,4,7,3],[1,2,6,5]],NB=[[0,0,-1],[0,0,1],[0,-1,0],[0,1,0],[-1,0,0],[1,0,0]];
-const id3=(i,j,k)=>i+W3*(j+(NY3+1)*k);
-const elNodes=e=>{const i=e%NX3,j=((e/NX3)|0)%NY3,k=(e/(NX3*NY3))|0;return[id3(i,j,k),id3(i+1,j,k),id3(i+1,j+1,k),id3(i,j+1,k),id3(i,j,k+1),id3(i+1,j,k+1),id3(i+1,j+1,k+1),id3(i,j+1,k+1)]};
-const SF=[],SURF=new Uint8Array(NN3);
-for(let e=0;e<NX3*NY3*NZ3;e++){const i=e%NX3,j=((e/NX3)|0)%NY3,k=(e/(NX3*NY3))|0;
- FACES.forEach((fc,q)=>{const ii=i+NB[q][0],jj=j+NB[q][1],kk=k+NB[q][2];if(ii<0||ii>=NX3||jj<0||jj>=NY3||kk<0||kk>=NZ3){SF.push({e,fc});const n=elNodes(e);fc.forEach(v=>SURF[n[v]]=1)}})}
-let f3=[{n:id3(NX3,NY3>>1,NZ3>>1),f:[0,-800,0]}],S3=null,hn3=null,he3=null,TH={};
-const dot=(a,b)=>{let s=0;for(let i=0;i<a.length;i++)s+=a[i]*b[i];return s};
-function B3(x,y,z,a,b,c){const B=[0,1,2,3,4,5].map(()=>new Array(24).fill(0));
- for(let i=0;i<8;i++){const dx=HX[i]*(1+HY[i]*y)*(1+HZ[i]*z)/8/a,dy=HY[i]*(1+HX[i]*x)*(1+HZ[i]*z)/8/b,dz=HZ[i]*(1+HX[i]*x)*(1+HY[i]*y)/8/c,q=3*i;
-  B[0][q]=dx;B[1][q+1]=dy;B[2][q+2]=dz;B[3][q]=dy;B[3][q+1]=dx;B[4][q+1]=dz;B[4][q+2]=dy;B[5][q]=dz;B[5][q+2]=dx}return B}
-function eig3(s){const[xx,yy,zz,xy,yz,zx]=s,q=(xx+yy+zz)/3,p2=(xx-q)**2+(yy-q)**2+(zz-q)**2+2*(xy*xy+yz*yz+zx*zx),p=Math.sqrt(p2/6);if(p<1e-12)return[q,q,q];
- const B=[[xx-q,xy,zx],[xy,yy-q,yz],[zx,yz,zz-q]].map(r=>r.map(v=>v/p)),
- det=B[0][0]*(B[1][1]*B[2][2]-B[1][2]*B[2][1])-B[0][1]*(B[1][0]*B[2][2]-B[1][2]*B[2][0])+B[0][2]*(B[1][0]*B[2][1]-B[1][1]*B[2][0]),
- ph=Math.acos(Math.max(-1,Math.min(1,det/2)))/3,e1=q+2*p*Math.cos(ph),e3=q+2*p*Math.cos(ph+2*Math.PI/3);return[e1,3*q-e1-e3,e3]}
-function solve3(){
- const a=Q.L/NX3/2,b=Q.H/NY3/2,c=Q.W/NZ3/2,l=Q.E*Q.nu/((1+Q.nu)*(1-2*Q.nu)),m=Q.E/(2*(1+Q.nu)),g=1/Math.sqrt(3),
- D=[[l+2*m,l,l,0,0,0],[l,l+2*m,l,0,0,0],[l,l,l+2*m,0,0,0],[0,0,0,m,0,0],[0,0,0,0,m,0],[0,0,0,0,0,m]],K=new Float64Array(576);
- for(const x of[-g,g])for(const y of[-g,g])for(const z of[-g,g]){const B=B3(x,y,z,a,b,c),DB=D.map(r=>B[0].map((_,j)=>r.reduce((s,v,k)=>s+v*B[k][j],0)));
-  for(let i=0;i<24;i++)for(let j=0;j<24;j++){let s=0;for(let k=0;k<6;k++)s+=B[k][i]*DB[k][j];K[i*24+j]+=s*a*b*c}}
- const en=Array.from({length:NX3*NY3*NZ3},(_,e)=>elNodes(e)),nd=3*NN3,fx=new Uint8Array(nd),f=new Float64Array(nd);
- for(let k=0;k<=NZ3;k++)for(let j=0;j<=NY3;j++)for(let i=0;i<=NX3;i++)if({left:i==0,right:i==NX3,bottom:j==0,top:j==NY3}[Q.anchor]){const n=id3(i,j,k);fx[3*n]=fx[3*n+1]=fx[3*n+2]=1}
- for(const q of f3)for(let d=0;d<3;d++)if(!fx[3*q.n+d])f[3*q.n+d]+=q.f[d];
- const dg=new Float64Array(nd);for(const n of en)for(let i=0;i<8;i++)for(let d=0;d<3;d++)dg[3*n[i]+d]+=K[(3*i+d)*25];
- const xe=new Float64Array(24),mv=(x,y)=>{y.fill(0);for(const n of en){for(let i=0;i<8;i++)for(let d=0;d<3;d++)xe[3*i+d]=x[3*n[i]+d];
-  for(let i=0;i<24;i++){let s=0;for(let j=0;j<24;j++)s+=K[i*24+j]*xe[j];y[3*n[(i/3)|0]+i%3]+=s}}for(let d=0;d<nd;d++)if(fx[d])y[d]=0};
- const u=new Float64Array(nd),r=Float64Array.from(f),z=new Float64Array(nd),p=new Float64Array(nd),Ap=new Float64Array(nd);
- for(let d=0;d<nd;d++){if(fx[d])dg[d]=1;z[d]=r[d]/dg[d];p[d]=z[d]}
- let rz=dot(r,z),it=0;const tol=1e-10*(Math.sqrt(dot(f,f))||1);
- for(;it<6000&&Math.sqrt(dot(r,r))>tol;it++){mv(p,Ap);const al=rz/dot(p,Ap);for(let d=0;d<nd;d++){u[d]+=al*p[d];r[d]-=al*Ap[d];z[d]=r[d]/dg[d]}const r2=dot(r,z),be=r2/rz;rz=r2;for(let d=0;d<nd;d++)p[d]=z[d]+be*p[d]}
- const B0=B3(0,0,0,a,b,c),el=en.map(n=>{const ue=[];n.forEach(k=>ue.push(u[3*k],u[3*k+1],u[3*k+2]));
-  const e=B0.map(r=>r.reduce((s,v,i)=>s+v*ue[i],0)),s=D.map(r=>r.reduce((q,v,i)=>q+v*e[i],0)),[sx,sy,sz,txy,tyz,tzx]=s;
-  return{s,sx,sy,sz,vm:Math.sqrt(.5*((sx-sy)**2+(sy-sz)**2+(sz-sx)**2)+3*(txy*txy+tyz*tyz+tzx*tzx)),p:eig3(s),um:n.reduce((q,k)=>q+Math.hypot(u[3*k],u[3*k+1],u[3*k+2]),0)/8}});
- S3={u,el,fx,it};
-}
-function np(n){const i=n%W3,j=((n/W3)|0)%(NY3+1),k=(n/V3)|0,d=Q.def,u=S3?S3.u:[0,0,0,0];
- return[i*Q.L/NX3-Q.L/2+u[3*n]*d,j*Q.H/NY3-Q.H/2+u[3*n+1]*d,k*Q.W/NZ3-Q.W/2+u[3*n+2]*d]}
-function init3(){const gl=$('#gl');TH.r=new THREE.WebGLRenderer({canvas:gl,antialias:true});TH.r.setClearColor(0x14161b);
- TH.sc=new THREE.Scene();TH.cam=new THREE.PerspectiveCamera(40,1,1,3000);TH.cam.position.set(240,170,300);
- TH.ctl=new THREE.OrbitControls(TH.cam,gl);TH.ctl.addEventListener('change',()=>TH.r.render(TH.sc,TH.cam));
- const nq=SF.length,g=new THREE.BufferGeometry();
- g.setAttribute('position',new THREE.BufferAttribute(new Float32Array(nq*12),3));g.setAttribute('color',new THREE.BufferAttribute(new Float32Array(nq*12),3));
- g.setIndex([].concat(...SF.map((_,q)=>[4*q,4*q+1,4*q+2,4*q,4*q+2,4*q+3])));
- TH.m=new THREE.Mesh(g,new THREE.MeshBasicMaterial({vertexColors:true,side:THREE.DoubleSide}));
- const lg=new THREE.BufferGeometry();lg.setAttribute('position',g.attributes.position);lg.setIndex([].concat(...SF.map((_,q)=>[0,1,1,2,2,3,3,0].map(v=>4*q+v))));
- TH.l=new THREE.LineSegments(lg,new THREE.LineBasicMaterial({color:0,transparent:true,opacity:.3}));
- const ng=new THREE.BufferGeometry();ng.setAttribute('position',new THREE.BufferAttribute(new Float32Array(3*NN3),3));ng.setAttribute('color',new THREE.BufferAttribute(new Float32Array(3*NN3),3));
- TH.p=new THREE.Points(ng,new THREE.PointsMaterial({size:5,vertexColors:true,sizeAttenuation:false}));
- TH.a=new THREE.Group();TH.sc.add(TH.m,TH.l,TH.p,TH.a);TH.ray=new THREE.Raycaster();
- let dn=null;const xy=e=>{const r=gl.getBoundingClientRect();return[e.clientX-r.left,e.clientY-r.top,r.width,r.height]};
- const pickN=e=>{const[x,y,w,h]=xy(e);let best=null,bd=1e9;for(let n=0;n<NN3;n++){if(!SURF[n])continue;const P3=new THREE.Vector3(...np(n)),v=P3.clone().project(TH.cam);
-  if(Math.hypot((v.x+1)/2*w-x,(1-v.y)/2*h-y)<14){const d=TH.cam.position.distanceTo(P3);if(d<bd){bd=d;best=n}}}return best};
- gl.addEventListener('pointerdown',e=>dn=[e.clientX,e.clientY]);
- gl.addEventListener('pointermove',e=>{if(mod!='3d'||dn)return;const[x,y,w,h]=xy(e),n=pickN(e);TH.ray.setFromCamera(new THREE.Vector2(x/w*2-1,-(y/h)*2+1),TH.cam);
-  const hit=TH.ray.intersectObject(TH.m)[0],el=hit?SF[hit.faceIndex>>1].e:null;if(n!==hn3||el!==he3){hn3=n;he3=el;draw()}});
- gl.addEventListener('pointerup',e=>{const was=dn;dn=null;if(!was||Math.hypot(e.clientX-was[0],e.clientY-was[1])>4||mod!='3d')return;
-  const n=pickN(e);if(n==null||S3.fx[3*n])return;let q=f3.find(t=>t.n==n);
-  if(e.shiftKey){f3=f3.filter(t=>t.n!=n)}else{if(!q){q={n,f:[0,0,0]};f3.push(q)}Q.dir.forEach((v,d)=>q.f[d]+=v*Q.F);if(!q.f.some(Boolean))f3=f3.filter(t=>t!=q)}run()});
-}
-function draw3(){if(!TH.r)init3();const gl=$('#gl'),w=gl.clientWidth,h=gl.clientHeight;
- if(TH.w!=w||TH.h!=h){TH.r.setPixelRatio(devicePixelRatio||1);TH.r.setSize(w,h,false);TH.cam.aspect=w/h;TH.cam.updateProjectionMatrix();TH.w=w;TH.h=h}
- const F=Q.field,vals=S3.el.map(e=>F=='u'?e.um:e[F]);let lo=Math.min(...vals),hi=Math.max(...vals);if(F=='vm'||F=='u')lo=Math.min(lo,0);if(hi-lo<1e-9)hi=lo+1;
- const pos=TH.m.geometry.attributes.position,col=TH.m.geometry.attributes.color,tc=new THREE.Color(),wh=new THREE.Color(1,1,1);
- SF.forEach((s,q)=>{const n=elNodes(s.e);tc.set(cmap((vals[s.e]-lo)/(hi-lo)));if(s.e===he3)tc.lerp(wh,.4);
-  s.fc.forEach((v,k)=>{pos.setXYZ(4*q+k,...np(n[v]));col.setXYZ(4*q+k,tc.r,tc.g,tc.b)})});
- pos.needsUpdate=col.needsUpdate=true;
- const pp=TH.p.geometry.attributes.position,pc=TH.p.geometry.attributes.color,fl=new Set(f3.map(q=>q.n));
- for(let n=0;n<NN3;n++){pp.setXYZ(n,...np(n));pc.setXYZ(n,...(S3.fx[3*n]?[.9,.28,.3]:n==hn3?[1,1,1]:fl.has(n)?[1,.62,.26]:[.5,.5,.55]))}
- pp.needsUpdate=pc.needsUpdate=true;
- while(TH.a.children.length)TH.a.remove(TH.a.children[0]);
- for(const q of f3){const d=new THREE.Vector3(...q.f).normalize(),L=Q.L/6;TH.a.add(new THREE.ArrowHelper(d,new THREE.Vector3(...np(q.n)).addScaledVector(d,-L),L,0xff9f43,L/5,L/8))}
- $('#leg').innerHTML=`<span>${fmt(lo)}</span><div id="bar" style="background:linear-gradient(90deg,${[0,.25,.5,.75,1].map(t=>cmap(t)).join(',')})"></div><span>${fmt(hi)} ${F=='u'?'mm':'MPa'}</span>`;
- TH.r.render(TH.sc,TH.cam)}
-function left3(p){p.innerHTML='<h3>Geometry & material</h3>';
- p.append(slider('Length','L',Q,100,400,10,'mm',run),slider('Height','H',Q,10,80,2,'mm',run),slider('Width','W',Q,10,80,2,'mm',run),slider('Young’s modulus','E',Q,1000,300000,1000,'MPa',run),slider('Poisson ratio','nu',Q,.05,.45,.01,'',run));
- p.insertAdjacentHTML('beforeend','<h3 style="margin-top:16px">Anchor (fixed face)</h3>');
- p.append(seg([['left','−X'],['right','+X'],['bottom','−Y'],['top','+Y']],()=>Q.anchor,v=>{Q.anchor=v;run()}));
- p.insertAdjacentHTML('beforeend','<h3 style="margin-top:16px">Load direction</h3>');
- p.append(seg([['1,0,0','+X'],['-1,0,0','−X'],['0,1,0','+Y'],['0,-1,0','−Y'],['0,0,1','+Z'],['0,0,-1','−Z']],()=>Q.dir.join(','),v=>Q.dir=v.split(',').map(Number)));
- p.append(slider('Force per click','F',Q,50,5000,50,'N',()=>{}),slider('Deformation scale','def',Q,1,300,1,'×',draw));
- const b=document.createElement('button');b.className='btn';b.textContent='Clear loads';b.onclick=()=>{f3=[];run()};p.append(b);
- p.insertAdjacentHTML('beforeend','<p class="note">Hex8 solid, mm–N–MPa, matrix-free PCG. Click a surface node: force. Shift+click: remove.</p>')}
-function right3(R,kv){const el=S3.el,top=el.reduce((a,b)=>b.vm>a.vm?b:a),sel=he3!=null?el[he3]:top,um=Math.max(...Array.from({length:NN3},(_,n)=>Math.hypot(S3.u[3*n],S3.u[3*n+1],S3.u[3*n+2]))),[a,b,c,d,e,f]=sel.s,[p1,p2,p3]=sel.p;
- R.innerHTML=`<div class="sec"><h3>Summary</h3>${kv('Loads applied',f3.length)}${kv('Max von Mises',fmt(top.vm)+' MPa')}${kv('Max displacement',fmt(um)+' mm')}${kv('Solver',S3.it+' PCG iterations')}</div>
- <div class="sec"><h3>${he3!=null?'Hovered element':'Peak-stress element'}</h3><p class="note">Stress tensor σ (MPa)</p>
- <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px;text-align:center">${[a,d,f,d,b,e,f,e,c].map(v=>`<div style="background:#1b1e25;border-radius:5px;padding:5px">${fmt(v)}</div>`).join('')}</div>
- ${kv('σ1 / σ2 / σ3',[p1,p2,p3].map(fmt).join(' / '))}${kv('τmax = (σ1−σ3)/2',fmt((p1-p3)/2))}${kv('von Mises',fmt(sel.vm))}</div>`}
-</script>
-</body></html>
+      // ---------- FEM: bilinear Q4, plane stress ----------
+      function Bm(x, y, a, b) {
+        const B = [0, 1, 2].map(() => new Array(8).fill(0));
+        for (let i = 0; i < 4; i++) {
+          const dx = (XS[i] * (1 + YS[i] * y)) / 4 / a,
+            dy = (YS[i] * (1 + XS[i] * x)) / 4 / b;
+          B[0][2 * i] = dx;
+          B[1][2 * i + 1] = dy;
+          B[2][2 * i] = dy;
+          B[2][2 * i + 1] = dx;
+        }
+        return B;
+      }
+      function solve() {
+        syncMesh2();
+        const a = P.L / NX / 2,
+          b = P.H / NY / 2,
+          c = P.E / (1 - P.nu ** 2),
+          D = [
+            [c, c * P.nu, 0],
+            [c * P.nu, c, 0],
+            [0, 0, (c * (1 - P.nu)) / 2],
+          ],
+          g = 1 / Math.sqrt(3);
+        const K = Array.from({ length: 8 }, () => new Array(8).fill(0));
+        for (const gx of [-g, g])
+          for (const gy of [-g, g]) {
+            const B = Bm(gx, gy, a, b);
+            for (let i = 0; i < 8; i++)
+              for (let j = 0; j < 8; j++) {
+                let s = 0;
+                for (let k = 0; k < 3; k++)
+                  for (let l = 0; l < 3; l++) s += B[k][i] * D[k][l] * B[l][j];
+                K[i][j] += s * a * b * P.t;
+              }
+          }
+        const W = NX + 1,
+          nn = W * (NY + 1),
+          nd = 2 * nn,
+          Kg = new Float64Array(nd * nd),
+          en = [];
+        for (let ey = 0; ey < NY; ey++)
+          for (let ex = 0; ex < NX; ex++) {
+            const n0 = ex + ey * W,
+              n = [n0, n0 + 1, n0 + W + 1, n0 + W];
+            en.push(n);
+            const d = n.flatMap((k) => [2 * k, 2 * k + 1]);
+            for (let i = 0; i < 8; i++)
+              for (let j = 0; j < 8; j++) Kg[d[i] * nd + d[j]] += K[i][j];
+          }
+        const fixed = new Uint8Array(nd);
+        for (let j = 0; j <= NY; j++)
+          for (let i = 0; i <= NX; i++) {
+            const f = {
+              left: i == 0,
+              right: i == NX,
+              bottom: j == 0,
+              top: j == NY,
+            }[P.anchor];
+            if (f) {
+              fixed[2 * (i + j * W)] = 1;
+              fixed[2 * (i + j * W) + 1] = 1;
+            }
+          }
+        const fr = [];
+        for (let k = 0; k < nd; k++) if (!fixed[k]) fr.push(k);
+        const m = fr.length,
+          A = new Float64Array(m * m),
+          f = new Float64Array(m),
+          pos = new Int32Array(nd).fill(-1);
+        fr.forEach((k, i) => (pos[k] = i));
+        for (let i = 0; i < m; i++)
+          for (let j = 0; j < m; j++) A[i * m + j] = Kg[fr[i] * nd + fr[j]];
+        for (const q of forces) {
+          if (pos[2 * q.n] >= 0) f[pos[2 * q.n]] += q.fx;
+          if (pos[2 * q.n + 1] >= 0) f[pos[2 * q.n + 1]] += q.fy;
+        }
+        for (let k = 0; k < m; k++) {
+          const p = A[k * m + k];
+          for (let i = k + 1; i < m; i++) {
+            const r = A[i * m + k] / p;
+            if (!r) continue;
+            for (let j = k; j < m; j++) A[i * m + j] -= r * A[k * m + j];
+            f[i] -= r * f[k];
+          }
+        }
+        const x = new Float64Array(m);
+        for (let i = m - 1; i >= 0; i--) {
+          let s = f[i];
+          for (let j = i + 1; j < m; j++) s -= A[i * m + j] * x[j];
+          x[i] = s / A[i * m + i];
+        }
+        const u = new Float64Array(nd);
+        fr.forEach((k, i) => (u[k] = x[i]));
+        const B0 = Bm(0, 0, a, b),
+          el = en.map((n) => {
+            const ue = n.flatMap((k) => [u[2 * k], u[2 * k + 1]]),
+              e = B0.map((r) => r.reduce((s, v, i) => s + v * ue[i], 0)),
+              s = D.map((r) => r.reduce((q, v, i) => q + v * e[i], 0)),
+              [sx, sy, tx] = s,
+              av = (sx + sy) / 2,
+              R = Math.hypot((sx - sy) / 2, tx);
+            return {
+              n,
+              e,
+              sx,
+              sy,
+              tx,
+              vm: Math.sqrt(sx * sx - sx * sy + sy * sy + 3 * tx * tx),
+              s1: av + R,
+              s2: av - R,
+              R,
+              av,
+              thp: (0.5 * Math.atan2(2 * tx, sx - sy) * 180) / Math.PI,
+              um:
+                n.reduce((q, k) => q + Math.hypot(u[2 * k], u[2 * k + 1]), 0) /
+                4,
+            };
+          });
+        S = { u, el, fixed, W };
+      }
+      // ---------- drawing ----------
+      function size() {
+        const r = devicePixelRatio || 1,
+          w = cv.clientWidth,
+          h = cv.clientHeight;
+        if (cv.width != w * r || cv.height != h * r) {
+          cv.width = w * r;
+          cv.height = h * r;
+        }
+        ctx.setTransform(r, 0, 0, r, 0, 0);
+        return [w, h];
+      }
+      function pt(i, j, def) {
+        const k = i + j * (NX + 1),
+          x = (i * P.L) / NX,
+          y = (j * P.H) / NY,
+          u = S ? S.u[2 * k] * def : 0,
+          v = S ? S.u[2 * k + 1] * def : 0;
+        return [geo.ox + (x + u) * geo.s, geo.oy - (y + v) * geo.s];
+      }
+      function drawBeam() {
+        const [w, h] = size();
+        ctx.clearRect(0, 0, w, h);
+        geo.s = Math.min((w * 0.78) / P.L, (h * 0.6) / P.H);
+        geo.ox = (w - P.L * geo.s) / 2;
+        geo.oy = h / 2 + (P.H * geo.s) / 2;
+        const F = P.field,
+          vals = S.el.map((e) => (F == "u" ? e.um : e[F]));
+        let lo = Math.min(...vals),
+          hi = Math.max(...vals);
+        if (F == "vm" || F == "u") lo = Math.min(lo, 0);
+        if (hi - lo < 1e-9) hi = lo + 1;
+        S.el.forEach((e, q) => {
+          const i = q % NX,
+            j = (q / NX) | 0,
+            ps = [
+              pt(i, j, P.def),
+              pt(i + 1, j, P.def),
+              pt(i + 1, j + 1, P.def),
+              pt(i, j + 1, P.def),
+            ];
+          ctx.beginPath();
+          ps.forEach((p, k) => (k ? ctx.lineTo(...p) : ctx.moveTo(...p)));
+          ctx.closePath();
+          ctx.fillStyle = cmap((vals[q] - lo) / (hi - lo));
+          ctx.fill();
+          ctx.strokeStyle = q === he ? "#fff" : "rgba(0,0,0,.28)";
+          ctx.lineWidth = q === he ? 2 : 1;
+          ctx.stroke();
+        });
+        // nodes + anchors
+        for (let j = 0; j <= NY; j++)
+          for (let i = 0; i <= NX; i++) {
+            const k = i + j * (NX + 1),
+              p = pt(i, j, P.def);
+            if (S.fixed[2 * k]) {
+              ctx.fillStyle = "#e5484d";
+              ctx.fillRect(p[0] - 3, p[1] - 3, 6, 6);
+            } else {
+              ctx.beginPath();
+              ctx.arc(p[0], p[1], k === hn ? 5 : 2, 0, 7);
+              ctx.fillStyle = k === hn ? "#fff" : "rgba(255,255,255,.35)";
+              ctx.fill();
+            }
+          }
+        // forces
+        for (const q of forces) {
+          const i = q.n % (NX + 1),
+            j = (q.n / (NX + 1)) | 0,
+            p = pt(i, j, P.def),
+            m = Math.hypot(q.fx, q.fy),
+            dx = q.fx / m,
+            dy = -q.fy / m,
+            L = 38;
+          const x0 = p[0] - dx * L,
+            y0 = p[1] - dy * L;
+          ctx.strokeStyle = ctx.fillStyle = "#ff9f43";
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(x0, y0);
+          ctx.lineTo(...p);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(...p);
+          ctx.lineTo(p[0] - dx * 9 - dy * 5, p[1] - dy * 9 + dx * 5);
+          ctx.lineTo(p[0] - dx * 9 + dy * 5, p[1] - dy * 9 - dx * 5);
+          ctx.fill();
+          ctx.font = "11px IBM Plex Sans";
+          ctx.fillText(fmt(m) + " N", x0 + (dx < 0 ? 6 : -30), y0 - 6);
+        }
+        const u = F == "u" ? "mm" : "MPa";
+        $("#leg").innerHTML =
+          `<span>${fmt(lo)}</span><div id="bar" style="background:linear-gradient(90deg,${[0, 0.25, 0.5, 0.75, 1].map((t) => cmap(t)).join(",")})"></div><span>${fmt(hi)} ${u}</span>`;
+      }
+      function drawMohr(c, w, h, sx, sy, tx, th) {
+        c.clearRect(0, 0, w, h);
+        const av = (sx + sy) / 2,
+          d = (sx - sy) / 2,
+          R = Math.hypot(d, tx),
+          s = Math.min(
+            (w * 0.42) / (R + Math.abs(av) + 1),
+            (h * 0.4) / (R + 1),
+          ),
+          x0 = w / 2 - av * s,
+          y0 = h / 2,
+          X = (v) => x0 + v * s,
+          Y = (v) => y0 + v * s;
+        c.strokeStyle = "#3a3f4b";
+        c.lineWidth = 1;
+        c.beginPath();
+        c.moveTo(8, y0);
+        c.lineTo(w - 8, y0);
+        c.moveTo(x0, 8);
+        c.lineTo(x0, h - 8);
+        c.stroke();
+        c.fillStyle = "#7b8493";
+        c.font = "11px IBM Plex Sans";
+        c.fillText("σ", w - 16, y0 - 5);
+        c.fillText("τ (down +)", x0 + 5, 16);
+        c.strokeStyle = "#7b6cf0";
+        c.lineWidth = 2;
+        c.beginPath();
+        c.arc(X(av), y0, R * s, 0, 7);
+        c.stroke();
+        const t = (th * Math.PI) / 90,
+          c2 = Math.cos(t),
+          s2 = Math.sin(t),
+          a1 = av + d * c2 + tx * s2,
+          a2 = av - d * c2 - tx * s2,
+          tt = -d * s2 + tx * c2;
+        const dot = (px, py, col, l) => {
+          c.fillStyle = col;
+          c.beginPath();
+          c.arc(X(px), Y(py), 4, 0, 7);
+          c.fill();
+          c.fillText(l, X(px) + 6, Y(py) - 6);
+        };
+        c.strokeStyle = "#cfd3dc";
+        c.lineWidth = 1;
+        c.beginPath();
+        c.moveTo(X(a1), Y(tt));
+        c.lineTo(X(a2), Y(-tt));
+        c.stroke();
+        dot(av + R, 0, "#a6d94e", "σ1");
+        dot(av - R, 0, "#a6d94e", "σ2");
+        dot(a1, tt, "#ff9f43", "x'");
+        dot(a2, -tt, "#ff9f43", "y'");
+        return { a1, a2, tt, R, av };
+      }
+      const dot3 = (a, b) => {
+        let s = 0;
+        for (let i = 0; i < a.length; i++) s += a[i] * b[i];
+        return s;
+      };
+      const unitVec3 = (v) => {
+        const m = Math.hypot(...v);
+        return m > 1e-10 ? v.map((x) => x / m) : [1, 0, 0];
+      };
+      const cross3 = (a, b) => [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+      ];
+      function stressTensor2(sx, sy, tx) {
+        return [
+          [sx, tx, 0],
+          [tx, sy, 0],
+          [0, 0, 0],
+        ];
+      }
+      function strainTensor2(ex, ey, txy) {
+        return [
+          [ex, txy / 2, 0],
+          [txy / 2, ey, 0],
+          [0, 0, 0],
+        ];
+      }
+      function planeResponse2(el) {
+        const stress = stressTensor2(el.sx, el.sy, el.tx),
+          strain = strainTensor2(el.e[0], el.e[1], el.e[2]),
+          n = [PL2.nx, PL2.ny, PL2.nz],
+          traction = [0, 0, 0];
+        for (let i = 0; i < 3; i++)
+          for (let j = 0; j < 3; j++) traction[i] += stress[i][j] * n[j];
+        const normalStress = dot3(traction, n),
+          normalComponent = n.map((v) => v * normalStress),
+          shearComponent = traction.map((v, i) => v - normalComponent[i]),
+          strainVector = [0, 0, 0];
+        for (let i = 0; i < 3; i++)
+          for (let j = 0; j < 3; j++) strainVector[i] += strain[i][j] * n[j];
+        const normalStrain = dot3(strainVector, n),
+          normalStrainComponent = n.map((v) => v * normalStrain),
+          shearStrainComponent = strainVector.map(
+            (v, i) => v - normalStrainComponent[i],
+          );
+        return {
+          stress,
+          strain,
+          n,
+          traction,
+          normalStress,
+          normalComponent,
+          shearComponent,
+          shearMag: Math.hypot(...shearComponent),
+          normalStrain,
+          shearStrainMag: Math.hypot(...shearStrainComponent),
+        };
+      }
+      function planeSliderHtml2(k, label) {
+        return (
+          '<div class="row"><label>' +
+          label +
+          "<b>" +
+          PL2[k].toFixed(2) +
+          '</b></label><input id="pl2-' +
+          k +
+          '" type="range" min="-1" max="1" step="0.05" value="' +
+          PL2[k] +
+          '"></div>'
+        );
+      }
+      function arrow2(c, a, b, color, label) {
+        const ang = Math.atan2(b[1] - a[1], b[0] - a[0]);
+        c.strokeStyle = c.fillStyle = color;
+        c.lineWidth = 2;
+        c.beginPath();
+        c.moveTo(...a);
+        c.lineTo(...b);
+        c.stroke();
+        c.beginPath();
+        c.moveTo(...b);
+        c.lineTo(
+          b[0] - 9 * Math.cos(ang - 0.45),
+          b[1] - 9 * Math.sin(ang - 0.45),
+        );
+        c.lineTo(
+          b[0] - 9 * Math.cos(ang + 0.45),
+          b[1] - 9 * Math.sin(ang + 0.45),
+        );
+        c.fill();
+        c.font = "11px IBM Plex Sans";
+        c.fillText(label, b[0] + 5, b[1] - 5);
+      }
+      function drawPlaneCanvas2(data) {
+        const canvas = $("#planeCanvas2");
+        if (!canvas || !data) return;
+        const r = devicePixelRatio || 1,
+          w = canvas.clientWidth,
+          h = 150,
+          c = canvas.getContext("2d");
+        canvas.width = w * r;
+        canvas.height = h * r;
+        c.setTransform(r, 0, 0, r, 0, 0);
+        c.clearRect(0, 0, w, h);
+        const n = data.n,
+          ref = Math.abs(n[0]) < 0.85 ? [1, 0, 0] : [0, 1, 0],
+          u = unitVec3(cross3(n, ref)),
+          v = unitVec3(cross3(n, u)),
+          scale = Math.min(w, h) * 0.28,
+          project = (p) => [
+            w / 2 + (p[0] - p[2] * 0.55) * scale,
+            h / 2 - (p[1] + p[2] * 0.35) * scale,
+          ],
+          corners = [
+            [u[0] + v[0], u[1] + v[1], u[2] + v[2]],
+            [-u[0] + v[0], -u[1] + v[1], -u[2] + v[2]],
+            [-u[0] - v[0], -u[1] - v[1], -u[2] - v[2]],
+            [u[0] - v[0], u[1] - v[1], u[2] - v[2]],
+          ].map(project),
+          o = project([0, 0, 0]);
+        c.fillStyle = "rgba(123,108,240,.28)";
+        c.strokeStyle = "#7b6cf0";
+        c.beginPath();
+        corners.forEach((p, i) => (i ? c.lineTo(...p) : c.moveTo(...p)));
+        c.closePath();
+        c.fill();
+        c.stroke();
+        const drawVec = (vec, color, label, len = 1) => {
+          const m = Math.hypot(...vec);
+          if (m < 1e-10) return;
+          arrow2(c, o, project(vec.map((x) => (x / m) * len)), color, label);
+        };
+        drawVec(n, "#d9dde5", "n", 0.8);
+        drawVec(data.traction, "#ff5d5d", "t", 1.05);
+        drawVec(data.normalComponent, "#62a8ff", "sigma_n", 0.9);
+        drawVec(data.shearComponent, "#ff9f43", "tau", 0.85);
+      }
+      function bindPlaneControls2() {
+        ["nx", "ny", "nz"].forEach((k) => {
+          const input = $(`#pl2-${k}`);
+          if (!input) return;
+          input.oninput = (e) => {
+            PL2[k] = +e.target.value;
+            draw();
+          };
+        });
+        const presets = {
+          "pl2-xy": [0, 0, 1],
+          "pl2-xz": [0, 1, 0],
+          "pl2-yz": [1, 0, 0],
+          "pl2-diag": [1, 1, 1],
+        };
+        Object.entries(presets).forEach(([id, n]) => {
+          const b = $(`#${id}`);
+          if (b) b.onclick = () => setPlane2(...n);
+        });
+      }
+      function setPlane2(x, y, z) {
+        PL2.nx = x;
+        PL2.ny = y;
+        PL2.nz = z;
+        draw();
+      }
+      function matrixHtml(m, scale = 1) {
+        return (
+          '<div class="mat">' +
+          m
+            .flat()
+            .map((v) => "<div>" + fmt(v * scale) + "</div>")
+            .join("") +
+          "</div>"
+        );
+      }
+      // ---------- UI ----------
+      const MODS = [
+        ["cant", "Cantilever 2D (plane stress)"],
+        ["3d", "Cantilever 3D (hex8)"],
+        ["mohr", "Mohr's circle"],
+        ["", "Axial bar"],
+        ["", "Truss"],
+      ];
+      function slider(l, k, o, min, max, st, u, cb) {
+        const r = document.createElement("div");
+        r.className = "row";
+        r.innerHTML = `<label>${l}<b>${o[k]} ${u}</b></label><input type=range min=${min} max=${max} step=${st} value=${o[k]}>`;
+        r.querySelector("input").oninput = (e) => {
+          o[k] = +e.target.value;
+          r.querySelector("b").textContent = o[k] + " " + u;
+          cb();
+        };
+        return r;
+      }
+      function seg(opts, cur, cb) {
+        const d = document.createElement("div");
+        d.className = "seg";
+        opts.forEach(([v, l]) => {
+          const b = document.createElement("button");
+          b.textContent = l;
+          b.className = String(cur()) == String(v) ? "on" : "";
+          b.onclick = () => {
+            cb(v);
+            [...d.children].forEach((x) => (x.className = ""));
+            b.className = "on";
+          };
+          d.append(b);
+        });
+        return d;
+      }
+      function left() {
+        const L = $("#L");
+        L.innerHTML = '<div class="sec"><h3>Modules</h3></div>';
+        MODS.forEach(([id, n]) => {
+          const b = document.createElement("button");
+          b.className = "mod" + (id == mod ? " on" : "");
+          b.textContent = n + (id ? "" : " (planned)");
+          b.disabled = !id;
+          b.onclick = () => {
+            mod = id;
+            he = hn = null;
+            left();
+            tabs();
+            run();
+          };
+          L.firstChild.append(b);
+        });
+        const p = document.createElement("div");
+        p.className = "sec";
+        L.append(p);
+        if (mod == "cant") {
+          p.innerHTML = "<h3>Geometry & material</h3>";
+          p.append(
+            slider("Length", "L", P, 100, 400, 10, "mm", run),
+            slider("Depth", "H", P, 10, 100, 2, "mm", run),
+            slider("Thickness", "t", P, 2, 40, 1, "mm", run),
+            slider("Young’s modulus", "E", P, 1000, 300000, 1000, "MPa", run),
+            slider("Poisson ratio", "nu", P, 0.05, 0.45, 0.01, "", run),
+          );
+          p.insertAdjacentHTML(
+            "beforeend",
+            '<h3 style="margin-top:16px">Mesh complexity</h3>',
+          );
+          const cr = document.createElement("div");
+          cr.className = "row";
+          cr.innerHTML =
+            '<label>Complexity<b>' +
+            P.complexity +
+            '</b></label><input id="cx-slider" type=range min=1 max=10 step=1 value=' +
+            P.complexity +
+            ">";
+          cr.querySelector("input").oninput = (e) => {
+            P.complexity = +e.target.value;
+            cr.querySelector("b").textContent = P.complexity;
+            const c = P.complexity;
+            P.nx = clampInt(Math.round(6 + (c - 1) * 30 / 9), 6, 36);
+            P.ny = clampInt(Math.round(2 + (c - 1) * 12 / 9), 2, 14);
+            const note = p.querySelector(".note");
+            if (note) note.textContent = "Pieces: " + P.nx + " × " + P.ny;
+            setMesh2();
+          };
+          p.append(cr);
+          p.insertAdjacentHTML(
+            "beforeend",
+            '<p class="note">Pieces: ' + P.nx + " × " + P.ny + "</p>",
+          );
+          p.insertAdjacentHTML(
+            "beforeend",
+            '<h3 style="margin-top:16px">Anchor (fixed edge)</h3>',
+          );
+          p.append(
+            seg(
+              [
+                ["left", "Left"],
+                ["right", "Right"],
+                ["top", "Top"],
+                ["bottom", "Bottom"],
+              ],
+              () => P.anchor,
+              (v) => {
+                P.anchor = v;
+                run();
+              },
+            ),
+          );
+          p.insertAdjacentHTML(
+            "beforeend",
+            '<h3 style="margin-top:16px">Load</h3>',
+          );
+          p.append(
+            seg(
+              [
+                ["0,1", "↑"],
+                ["0,-1", "↓"],
+                ["-1,0", "←"],
+                ["1,0", "→"],
+              ],
+              () => P.dir.join(","),
+              (v) => (P.dir = v.split(",").map(Number)),
+            ),
+          );
+          p.append(
+            slider("Force per click", "F", P, 50, 5000, 50, "N", () => {}),
+            slider("Deformation scale", "def", P, 1, 300, 1, "×", draw),
+          );
+          const b = document.createElement("button");
+          b.className = "btn";
+          b.textContent = "Clear loads";
+          b.onclick = () => {
+            forces = [];
+            run();
+          };
+          p.append(b);
+          p.insertAdjacentHTML(
+            "beforeend",
+            '<p class="note">Plane stress, Q4 elements, mm–N–MPa. Click a node to add a force; right-click to remove.</p>',
+          );
+        } else if (mod == "3d") {
+          left3(p);
+        } else {
+          p.innerHTML = "<h3>Stress state</h3>";
+          p.append(
+            slider("σx", "sx", M, -200, 200, 1, "MPa", run),
+            slider("σy", "sy", M, -200, 200, 1, "MPa", run),
+            slider("τxy", "txy", M, -150, 150, 1, "MPa", run),
+            slider("Plane angle θ", "th", M, -90, 90, 1, "°", run),
+          );
+        }
+      }
+      function tabs() {
+        const T = $("#tabs");
+        T.innerHTML = "";
+        if (mod != "cant" && mod != "3d") {
+          T.style.display = "none";
+          return;
+        }
+        T.style.display = "flex";
+        const O = mod == "3d" ? Q : P;
+        (mod == "3d"
+          ? [
+              ["vm", "von Mises"],
+              ["sx", "σxx"],
+              ["sy", "σyy"],
+              ["sz", "σzz"],
+              ["u", "Displacement"],
+            ]
+          : [
+              ["vm", "von Mises"],
+              ["sx", "σx"],
+              ["sy", "σy"],
+              ["tx", "τxy"],
+              ["u", "Displacement"],
+            ]
+        ).forEach(([k, n]) => {
+          const b = document.createElement("button");
+          b.textContent = n;
+          b.className = O.field == k ? "on" : "";
+          b.onclick = () => {
+            O.field = k;
+            tabs();
+            draw();
+          };
+          T.append(b);
+        });
+      }
+      function right() {
+        const R = $("#R"),
+          kv = (a, b) =>
+            `<div class="kv"><span>${a}</span><span>${b}</span></div>`;
+        if (mod == "3d") {
+          right3(R, kv);
+          return;
+        }
+        if (mod == "cant") {
+          const el = S.el,
+            top = el.reduce((a, b) => (b.vm > a.vm ? b : a)),
+            sel = he != null ? el[he] : top,
+            ti = el.indexOf(top),
+            umax = Math.max(
+              ...[...Array((NX + 1) * (NY + 1)).keys()].map((k) =>
+                Math.hypot(S.u[2 * k], S.u[2 * k + 1]),
+              ),
+            );
+          R.innerHTML = `<div class="sec"><h3>Summary</h3>${kv("Loads applied", forces.length)}${kv("Max von Mises", fmt(top.vm) + " MPa")}${kv("Max |σx|", fmt(Math.max(...el.map((e) => Math.abs(e.sx)))) + " MPa")}${kv("Max displacement", fmt(umax) + " mm")}
+  <p class="note">${forces.length ? `Peak von Mises sits in element column ${(ti % NX) + 1}/${NX}, row ${((ti / NX) | 0) + 1}/${NY} (from bottom-left).` : "No loads yet — click nodes in the plot."}</p></div>
+  <div class="sec"><h3>${he != null ? "Hovered element" : "Peak-stress element"}</h3>${kv("σx / σy / τxy", [sel.sx, sel.sy, sel.tx].map(fmt).join(" / "))}${kv("εx / εy / γxy (×10⁻⁶)", sel.e.map((v) => (v * 1e6).toFixed(0)).join(" / "))}${kv("σ1 / σ2", fmt(sel.s1) + " / " + fmt(sel.s2))}${kv("τmax", fmt(sel.R))}${kv("θp", sel.thp.toFixed(1) + "°")}${kv("von Mises", fmt(sel.vm))}
+  <canvas id="mc" style="height:170px;margin-top:8px"></canvas></div>
+  <div class="sec"><h3>Stress tensor σ (MPa)</h3>${matrixHtml(stressTensor2(sel.sx, sel.sy, sel.tx))}</div>
+  <div class="sec"><h3>Strain tensor ε (µε)</h3>${matrixHtml(strainTensor2(sel.e[0], sel.e[1], sel.e[2]), 1e6)}</div>
+  <div class="sec"><h3>Arbitrary plane</h3>
+  ${planeSliderHtml2("nx", "n_x")}${planeSliderHtml2("ny", "n_y")}${planeSliderHtml2("nz", "n_z")}
+  <div class="seg"><button id="pl2-xy">XY</button><button id="pl2-xz">XZ</button><button id="pl2-yz">YZ</button><button id="pl2-diag">Diag</button></div>
+  <div id="plane2-stats"></div>
+  <canvas id="planeCanvas2" class="plane-canvas"></canvas></div>`;
+          const c = $("#mc"),
+            r = devicePixelRatio || 1;
+          c.width = c.clientWidth * r;
+          c.height = 170 * r;
+          const x = c.getContext("2d");
+          x.setTransform(r, 0, 0, r, 0, 0);
+          drawMohr(x, c.clientWidth, 170, sel.sx, sel.sy, sel.tx, 0);
+          if (S && S.el.length) {
+            const pr = planeResponse2(sel);
+            const p2s = $("#plane2-stats");
+            if (p2s) {
+              p2s.innerHTML =
+                '<div class="kv"><span>unit n</span><span>[' +
+                pr.n.map((v) => v.toFixed(2)).join(", ") +
+                "]</span></div>" +
+                '<div class="kv"><span>t = σn</span><span>[' +
+                pr.traction.map(fmt).join(", ") +
+                "] MPa</span></div>" +
+                '<div class="kv"><span>σn / |τ|</span><span>' +
+                fmt(pr.normalStress) +
+                " / " +
+                fmt(pr.shearMag) +
+                " MPa</span></div>" +
+                '<div class="kv"><span>εn / shear strain</span><span>' +
+                fmt(pr.normalStrain * 1e6) +
+                " / " +
+                fmt(pr.shearStrainMag * 1e6) +
+                " µε</span></div>";
+            }
+            drawPlaneCanvas2(pr);
+          }
+          bindPlaneControls2();
+        } else {
+          const av = (M.sx + M.sy) / 2,
+            Rr = Math.hypot((M.sx - M.sy) / 2, M.txy);
+          R.innerHTML = `<div class="sec"><h3>Principal state</h3>${kv("σ1", fmt(av + Rr) + " MPa")}${kv("σ2", fmt(av - Rr) + " MPa")}${kv("τmax", fmt(Rr) + " MPa")}${kv("θp", ((0.5 * Math.atan2(2 * M.txy, M.sx - M.sy) * 180) / Math.PI).toFixed(1) + "°")}${kv("Centre", fmt(av) + " MPa")}</div><div class="sec" id="tr"><h3>Rotated plane (θ = ${M.th}°)</h3></div>`;
+        }
+      }
+      function hint() {
+        $("#hint").textContent =
+          mod == "3d"
+            ? "Drag: orbit · Wheel: zoom · Click a surface node: force · Shift+click: remove"
+            : mod == "cant"
+              ? "Click a node: apply force · Right-click: remove · Hover: element · Right panel: stress tensor + arbitrary plane"
+              : "Drag the sliders — the orange line is the plane rotated by θ";
+      }
+      function draw() {
+        cv.style.display = mod == "3d" ? "none" : "block";
+        $("#gl").style.display = mod == "3d" ? "block" : "none";
+        if (mod == "3d") {
+          draw3();
+          right();
+        } else if (mod == "cant") {
+          drawBeam();
+          right();
+        } else {
+          const [w, h] = size(),
+            o = drawMohr(ctx, w, h, M.sx, M.sy, M.txy, M.th);
+          right();
+          $("#tr").insertAdjacentHTML(
+            "beforeend",
+            `<div class="kv"><span>σx'</span><span>${fmt(o.a1)} MPa</span></div><div class="kv"><span>σy'</span><span>${fmt(o.a2)} MPa</span></div><div class="kv"><span>τx'y'</span><span>${fmt(o.tt)} MPa</span></div>`,
+          );
+          $("#leg").innerHTML = "";
+        }
+        hint();
+      }
+      function run() {
+        if (mod == "cant") solve();
+        if (mod == "3d") solve3();
+        draw();
+      }
+      // ---------- interaction ----------
+      function pick(ev) {
+        const r = cv.getBoundingClientRect(),
+          mx = ev.clientX - r.left,
+          my = ev.clientY - r.top;
+        let bn = null,
+          bd = 11,
+          be = null,
+          ed = 1e9;
+        for (let j = 0; j <= NY; j++)
+          for (let i = 0; i <= NX; i++) {
+            const p = pt(i, j, P.def),
+              d = Math.hypot(p[0] - mx, p[1] - my);
+            if (d < bd) {
+              bd = d;
+              bn = i + j * (NX + 1);
+            }
+          }
+        S.el.forEach((e, q) => {
+          const i = q % NX,
+            j = (q / NX) | 0,
+            a = pt(i, j, P.def),
+            b = pt(i + 1, j + 1, P.def),
+            d = Math.hypot((a[0] + b[0]) / 2 - mx, (a[1] + b[1]) / 2 - my);
+          if (d < ed) {
+            ed = d;
+            be = q;
+          }
+        });
+        return { bn, be: ed < ((geo.s * P.L) / NX) * 1.2 ? be : null };
+      }
+      cv.onmousemove = (e) => {
+        if (mod != "cant") return;
+        const p = pick(e);
+        if (p.bn !== hn || p.be !== he) {
+          hn = p.bn;
+          he = p.be;
+          draw();
+        }
+      };
+      cv.onclick = (e) => {
+        if (mod != "cant") return;
+        const { bn } = pick(e);
+        if (bn == null || S.fixed[2 * bn]) return;
+        const [dx, dy] = P.dir,
+          q = forces.find((f) => f.n == bn);
+        if (q) {
+          q.fx += dx * P.F;
+          q.fy += dy * P.F;
+          if (!q.fx && !q.fy) forces.splice(forces.indexOf(q), 1);
+        } else forces.push({ n: bn, fx: dx * P.F, fy: dy * P.F });
+        run();
+      };
+      cv.oncontextmenu = (e) => {
+        e.preventDefault();
+        if (mod != "cant") return;
+        const { bn } = pick(e);
+        forces = forces.filter((f) => f.n != bn);
+        run();
+      };
+      addEventListener("resize", draw);
+      left();
+      tabs();
+      forces = [defaultForce2()];
+      run();
+    </script>
+    <script>
+      // ---------- 3D: hex8 solid cantilever, matrix-free PCG ----------
+      const Q = {
+        L: 240,
+        H: 40,
+        W: 40,
+        E: 200000,
+        nu: 0.3,
+        nx: 12,
+        ny: 4,
+        nz: 4,
+        anchor: "left",
+        F: 500,
+        dir: [0, -1, 0],
+        def: 40,
+        field: "vm",
+      };
+      const PL = { nx: 1, ny: 0, nz: 0 };
+      let NX3 = Q.nx,
+        NY3 = Q.ny,
+        NZ3 = Q.nz,
+        W3 = 0,
+        V3 = 0,
+        NN3 = 0,
+        SF = [],
+        SURF = new Uint8Array(0);
+      const HX = [-1, 1, 1, -1, -1, 1, 1, -1],
+        HY = [-1, -1, 1, 1, -1, -1, 1, 1],
+        HZ = [-1, -1, -1, -1, 1, 1, 1, 1];
+      const FACES = [
+          [0, 3, 2, 1],
+          [4, 5, 6, 7],
+          [0, 1, 5, 4],
+          [3, 7, 6, 2],
+          [0, 4, 7, 3],
+          [1, 2, 6, 5],
+        ],
+        NB = [
+          [0, 0, -1],
+          [0, 0, 1],
+          [0, -1, 0],
+          [0, 1, 0],
+          [-1, 0, 0],
+          [1, 0, 0],
+        ];
+      const id3 = (i, j, k) => i + W3 * (j + (NY3 + 1) * k);
+      const elNodes = (e) => {
+        const i = e % NX3,
+          j = ((e / NX3) | 0) % NY3,
+          k = (e / (NX3 * NY3)) | 0;
+        return [
+          id3(i, j, k),
+          id3(i + 1, j, k),
+          id3(i + 1, j + 1, k),
+          id3(i, j + 1, k),
+          id3(i, j, k + 1),
+          id3(i + 1, j, k + 1),
+          id3(i + 1, j + 1, k + 1),
+          id3(i, j + 1, k + 1),
+        ];
+      };
+      function rebuild3Topology() {
+        W3 = NX3 + 1;
+        V3 = W3 * (NY3 + 1);
+        NN3 = V3 * (NZ3 + 1);
+        SF = [];
+        SURF = new Uint8Array(NN3);
+        for (let e = 0; e < NX3 * NY3 * NZ3; e++) {
+          const i = e % NX3,
+            j = ((e / NX3) | 0) % NY3,
+            k = (e / (NX3 * NY3)) | 0;
+          FACES.forEach((fc, q) => {
+            const ii = i + NB[q][0],
+              jj = j + NB[q][1],
+              kk = k + NB[q][2];
+            if (
+              ii < 0 ||
+              ii >= NX3 ||
+              jj < 0 ||
+              jj >= NY3 ||
+              kk < 0 ||
+              kk >= NZ3
+            ) {
+              SF.push({ e, fc });
+              const n = elNodes(e);
+              fc.forEach((v) => (SURF[n[v]] = 1));
+            }
+          });
+        }
+      }
+      rebuild3Topology();
+      let f3 = [{ n: id3(NX3, NY3 >> 1, NZ3 >> 1), f: [0, -800, 0] }],
+        S3 = null,
+        hn3 = null,
+        he3 = null,
+        TH = {};
+      function defaultForce3() {
+        return { n: id3(NX3, NY3 >> 1, NZ3 >> 1), f: [0, -800, 0] };
+      }
+      function setMesh3() {
+        NX3 = clampInt(Q.nx, 6, 18);
+        NY3 = clampInt(Q.ny, 2, 8);
+        NZ3 = clampInt(Q.nz, 2, 8);
+        Q.nx = NX3;
+        Q.ny = NY3;
+        Q.nz = NZ3;
+        hn3 = he3 = null;
+        rebuild3Topology();
+        f3 = [defaultForce3()];
+        if (TH.sc) build3Geometry();
+        run();
+      }
+      const dot = (a, b) => {
+        let s = 0;
+        for (let i = 0; i < a.length; i++) s += a[i] * b[i];
+        return s;
+      };
+      function B3(x, y, z, a, b, c) {
+        const B = [0, 1, 2, 3, 4, 5].map(() => new Array(24).fill(0));
+        for (let i = 0; i < 8; i++) {
+          const dx = (HX[i] * (1 + HY[i] * y) * (1 + HZ[i] * z)) / 8 / a,
+            dy = (HY[i] * (1 + HX[i] * x) * (1 + HZ[i] * z)) / 8 / b,
+            dz = (HZ[i] * (1 + HX[i] * x) * (1 + HY[i] * y)) / 8 / c,
+            q = 3 * i;
+          B[0][q] = dx;
+          B[1][q + 1] = dy;
+          B[2][q + 2] = dz;
+          B[3][q] = dy;
+          B[3][q + 1] = dx;
+          B[4][q + 1] = dz;
+          B[4][q + 2] = dy;
+          B[5][q] = dz;
+          B[5][q + 2] = dx;
+        }
+        return B;
+      }
+      function eig3(s) {
+        const [xx, yy, zz, xy, yz, zx] = s,
+          q = (xx + yy + zz) / 3,
+          p2 =
+            (xx - q) ** 2 +
+            (yy - q) ** 2 +
+            (zz - q) ** 2 +
+            2 * (xy * xy + yz * yz + zx * zx),
+          p = Math.sqrt(p2 / 6);
+        if (p < 1e-12) return [q, q, q];
+        const B = [
+            [xx - q, xy, zx],
+            [xy, yy - q, yz],
+            [zx, yz, zz - q],
+          ].map((r) => r.map((v) => v / p)),
+          det =
+            B[0][0] * (B[1][1] * B[2][2] - B[1][2] * B[2][1]) -
+            B[0][1] * (B[1][0] * B[2][2] - B[1][2] * B[2][0]) +
+            B[0][2] * (B[1][0] * B[2][1] - B[1][1] * B[2][0]),
+          ph = Math.acos(Math.max(-1, Math.min(1, det / 2))) / 3,
+          e1 = q + 2 * p * Math.cos(ph),
+          e3 = q + 2 * p * Math.cos(ph + (2 * Math.PI) / 3);
+        return [e1, 3 * q - e1 - e3, e3];
+      }
+      function solve3() {
+        const a = Q.L / NX3 / 2,
+          b = Q.H / NY3 / 2,
+          c = Q.W / NZ3 / 2,
+          l = (Q.E * Q.nu) / ((1 + Q.nu) * (1 - 2 * Q.nu)),
+          m = Q.E / (2 * (1 + Q.nu)),
+          g = 1 / Math.sqrt(3),
+          D = [
+            [l + 2 * m, l, l, 0, 0, 0],
+            [l, l + 2 * m, l, 0, 0, 0],
+            [l, l, l + 2 * m, 0, 0, 0],
+            [0, 0, 0, m, 0, 0],
+            [0, 0, 0, 0, m, 0],
+            [0, 0, 0, 0, 0, m],
+          ],
+          K = new Float64Array(576);
+        for (const x of [-g, g])
+          for (const y of [-g, g])
+            for (const z of [-g, g]) {
+              const B = B3(x, y, z, a, b, c),
+                DB = D.map((r) =>
+                  B[0].map((_, j) => r.reduce((s, v, k) => s + v * B[k][j], 0)),
+                );
+              for (let i = 0; i < 24; i++)
+                for (let j = 0; j < 24; j++) {
+                  let s = 0;
+                  for (let k = 0; k < 6; k++) s += B[k][i] * DB[k][j];
+                  K[i * 24 + j] += s * a * b * c;
+                }
+            }
+        const en = Array.from({ length: NX3 * NY3 * NZ3 }, (_, e) =>
+            elNodes(e),
+          ),
+          nd = 3 * NN3,
+          fx = new Uint8Array(nd),
+          f = new Float64Array(nd);
+        for (let k = 0; k <= NZ3; k++)
+          for (let j = 0; j <= NY3; j++)
+            for (let i = 0; i <= NX3; i++)
+              if (
+                {
+                  left: i == 0,
+                  right: i == NX3,
+                  bottom: j == 0,
+                  top: j == NY3,
+                }[Q.anchor]
+              ) {
+                const n = id3(i, j, k);
+                fx[3 * n] = fx[3 * n + 1] = fx[3 * n + 2] = 1;
+              }
+        for (const q of f3)
+          for (let d = 0; d < 3; d++)
+            if (!fx[3 * q.n + d]) f[3 * q.n + d] += q.f[d];
+        const dg = new Float64Array(nd);
+        for (const n of en)
+          for (let i = 0; i < 8; i++)
+            for (let d = 0; d < 3; d++) dg[3 * n[i] + d] += K[(3 * i + d) * 25];
+        const xe = new Float64Array(24),
+          mv = (x, y) => {
+            y.fill(0);
+            for (const n of en) {
+              for (let i = 0; i < 8; i++)
+                for (let d = 0; d < 3; d++) xe[3 * i + d] = x[3 * n[i] + d];
+              for (let i = 0; i < 24; i++) {
+                let s = 0;
+                for (let j = 0; j < 24; j++) s += K[i * 24 + j] * xe[j];
+                y[3 * n[(i / 3) | 0] + (i % 3)] += s;
+              }
+            }
+            for (let d = 0; d < nd; d++) if (fx[d]) y[d] = 0;
+          };
+        const u = new Float64Array(nd),
+          r = Float64Array.from(f),
+          z = new Float64Array(nd),
+          p = new Float64Array(nd),
+          Ap = new Float64Array(nd);
+        for (let d = 0; d < nd; d++) {
+          if (fx[d]) dg[d] = 1;
+          z[d] = r[d] / dg[d];
+          p[d] = z[d];
+        }
+        let rz = dot(r, z),
+          it = 0;
+        const tol = 1e-10 * (Math.sqrt(dot(f, f)) || 1);
+        for (; it < 6000 && Math.sqrt(dot(r, r)) > tol; it++) {
+          mv(p, Ap);
+          const al = rz / dot(p, Ap);
+          for (let d = 0; d < nd; d++) {
+            u[d] += al * p[d];
+            r[d] -= al * Ap[d];
+            z[d] = r[d] / dg[d];
+          }
+          const r2 = dot(r, z),
+            be = r2 / rz;
+          rz = r2;
+          for (let d = 0; d < nd; d++) p[d] = z[d] + be * p[d];
+        }
+        const B0 = B3(0, 0, 0, a, b, c),
+          el = en.map((n) => {
+            const ue = [];
+            n.forEach((k) => ue.push(u[3 * k], u[3 * k + 1], u[3 * k + 2]));
+            const e = B0.map((r) => r.reduce((s, v, i) => s + v * ue[i], 0)),
+              s = D.map((r) => r.reduce((q, v, i) => q + v * e[i], 0)),
+              [sx, sy, sz, txy, tyz, tzx] = s;
+            return {
+              e,
+              s,
+              sx,
+              sy,
+              sz,
+              vm: Math.sqrt(
+                0.5 * ((sx - sy) ** 2 + (sy - sz) ** 2 + (sz - sx) ** 2) +
+                  3 * (txy * txy + tyz * tyz + tzx * tzx),
+              ),
+              p: eig3(s),
+              um:
+                n.reduce(
+                  (q, k) =>
+                    q + Math.hypot(u[3 * k], u[3 * k + 1], u[3 * k + 2]),
+                  0,
+                ) / 8,
+            };
+          });
+        S3 = { u, el, fx, it };
+      }
+      function np(n) {
+        const i = n % W3,
+          j = ((n / W3) | 0) % (NY3 + 1),
+          k = (n / V3) | 0,
+          d = Q.def,
+          u = S3 ? S3.u : [0, 0, 0, 0];
+        return [
+          (i * Q.L) / NX3 - Q.L / 2 + u[3 * n] * d,
+          (j * Q.H) / NY3 - Q.H / 2 + u[3 * n + 1] * d,
+          (k * Q.W) / NZ3 - Q.W / 2 + u[3 * n + 2] * d,
+        ];
+      }
+      function drop3Object(name) {
+        const o = TH[name];
+        if (!o || !TH.sc) return;
+        TH.sc.remove(o);
+        if (o.geometry) o.geometry.dispose();
+        if (o.material && o.material.dispose) o.material.dispose();
+        TH[name] = null;
+      }
+      function build3Geometry() {
+        if (!TH.sc) return;
+        ["m", "l", "p", "a"].forEach(drop3Object);
+        const nq = SF.length,
+          g = new THREE.BufferGeometry();
+        g.setAttribute(
+          "position",
+          new THREE.BufferAttribute(new Float32Array(nq * 12), 3),
+        );
+        g.setAttribute(
+          "color",
+          new THREE.BufferAttribute(new Float32Array(nq * 12), 3),
+        );
+        g.setIndex(
+          [].concat(
+            ...SF.map((_, q) => [
+              4 * q,
+              4 * q + 1,
+              4 * q + 2,
+              4 * q,
+              4 * q + 2,
+              4 * q + 3,
+            ]),
+          ),
+        );
+        TH.m = new THREE.Mesh(
+          g,
+          new THREE.MeshBasicMaterial({
+            vertexColors: true,
+            side: THREE.DoubleSide,
+          }),
+        );
+        const lg = new THREE.BufferGeometry();
+        lg.setAttribute("position", g.attributes.position);
+        lg.setIndex(
+          [].concat(
+            ...SF.map((_, q) => [0, 1, 1, 2, 2, 3, 3, 0].map((v) => 4 * q + v)),
+          ),
+        );
+        TH.l = new THREE.LineSegments(
+          lg,
+          new THREE.LineBasicMaterial({
+            color: 0,
+            transparent: true,
+            opacity: 0.3,
+          }),
+        );
+        const ng = new THREE.BufferGeometry();
+        ng.setAttribute(
+          "position",
+          new THREE.BufferAttribute(new Float32Array(3 * NN3), 3),
+        );
+        ng.setAttribute(
+          "color",
+          new THREE.BufferAttribute(new Float32Array(3 * NN3), 3),
+        );
+        TH.p = new THREE.Points(
+          ng,
+          new THREE.PointsMaterial({
+            size: 5,
+            vertexColors: true,
+            sizeAttenuation: false,
+          }),
+        );
+        TH.a = new THREE.Group();
+        TH.sc.add(TH.m, TH.l, TH.p, TH.a);
+      }
+      function init3() {
+        const gl = $("#gl");
+        TH.r = new THREE.WebGLRenderer({ canvas: gl, antialias: true });
+        TH.r.setClearColor(0x14161b);
+        TH.sc = new THREE.Scene();
+        TH.cam = new THREE.PerspectiveCamera(40, 1, 1, 3000);
+        TH.cam.position.set(240, 170, 300);
+        TH.ctl = new THREE.OrbitControls(TH.cam, gl);
+        TH.ctl.addEventListener("change", () => TH.r.render(TH.sc, TH.cam));
+        build3Geometry();
+        TH.ray = new THREE.Raycaster();
+        let dn = null;
+        const xy = (e) => {
+          const r = gl.getBoundingClientRect();
+          return [e.clientX - r.left, e.clientY - r.top, r.width, r.height];
+        };
+        const pickN = (e) => {
+          const [x, y, w, h] = xy(e);
+          let best = null,
+            bd = 1e9;
+          for (let n = 0; n < NN3; n++) {
+            if (!SURF[n]) continue;
+            const P3 = new THREE.Vector3(...np(n)),
+              v = P3.clone().project(TH.cam);
+            if (
+              Math.hypot(((v.x + 1) / 2) * w - x, ((1 - v.y) / 2) * h - y) < 14
+            ) {
+              const d = TH.cam.position.distanceTo(P3);
+              if (d < bd) {
+                bd = d;
+                best = n;
+              }
+            }
+          }
+          return best;
+        };
+        gl.addEventListener(
+          "pointerdown",
+          (e) => (dn = [e.clientX, e.clientY]),
+        );
+        gl.addEventListener("pointermove", (e) => {
+          if (mod != "3d" || dn) return;
+          const [x, y, w, h] = xy(e),
+            n = pickN(e);
+          TH.ray.setFromCamera(
+            new THREE.Vector2((x / w) * 2 - 1, -(y / h) * 2 + 1),
+            TH.cam,
+          );
+          const hit = TH.ray.intersectObject(TH.m)[0],
+            el = hit ? SF[hit.faceIndex >> 1].e : null;
+          if (n !== hn3 || el !== he3) {
+            hn3 = n;
+            he3 = el;
+            draw();
+          }
+        });
+        gl.addEventListener("pointerup", (e) => {
+          const was = dn;
+          dn = null;
+          if (
+            !was ||
+            Math.hypot(e.clientX - was[0], e.clientY - was[1]) > 4 ||
+            mod != "3d"
+          )
+            return;
+          const n = pickN(e);
+          if (n == null || S3.fx[3 * n]) return;
+          let q = f3.find((t) => t.n == n);
+          if (e.shiftKey) {
+            f3 = f3.filter((t) => t.n != n);
+          } else {
+            if (!q) {
+              q = { n, f: [0, 0, 0] };
+              f3.push(q);
+            }
+            Q.dir.forEach((v, d) => (q.f[d] += v * Q.F));
+            if (!q.f.some(Boolean)) f3 = f3.filter((t) => t != q);
+          }
+          run();
+        });
+      }
+      function matVec3(m, v) {
+        return m.map((r) => dot(r, v));
+      }
+      function stressTensor3(s) {
+        const [xx, yy, zz, xy, yz, zx] = s;
+        return [
+          [xx, xy, zx],
+          [xy, yy, yz],
+          [zx, yz, zz],
+        ];
+      }
+      function strainTensor3(e) {
+        const [xx, yy, zz, xy, yz, zx] = e;
+        return [
+          [xx, xy / 2, zx / 2],
+          [xy / 2, yy, yz / 2],
+          [zx / 2, yz / 2, zz],
+        ];
+      }
+      function matrixHtml(m, scale = 1) {
+        return `<div class="mat">${m
+          .flat()
+          .map((v) => `<div>${fmt(v * scale)}</div>`)
+          .join("")}</div>`;
+      }
+      function planeSliderHtml(k, label) {
+        return `<div class="row"><label>${label}<b>${PL[k].toFixed(2)}</b></label><input id="pl-${k}" type="range" min="-1" max="1" step="0.05" value="${PL[k]}"></div>`;
+      }
+      function selectedElement3Index() {
+        if (!S3 || !S3.el.length) return 0;
+        if (he3 != null) return he3;
+        return S3.el.reduce(
+          (best, e, i) => (e.vm > S3.el[best].vm ? i : best),
+          0,
+        );
+      }
+      function elementCenter3(e) {
+        const ns = elNodes(e),
+          c = [0, 0, 0];
+        ns.forEach((n) => {
+          const p = np(n);
+          c[0] += p[0];
+          c[1] += p[1];
+          c[2] += p[2];
+        });
+        return c.map((v) => v / ns.length);
+      }
+      function planeResponse3(index = selectedElement3Index()) {
+        if (!S3 || !S3.el.length) return null;
+        const el = S3.el[index],
+          n = unitVec3([PL.nx, PL.ny, PL.nz]),
+          stress = stressTensor3(el.s),
+          strain = strainTensor3(el.e),
+          traction = matVec3(stress, n),
+          normalStress = dot(traction, n),
+          normalComponent = n.map((v) => v * normalStress),
+          shearComponent = traction.map((v, i) => v - normalComponent[i]),
+          strainVector = matVec3(strain, n),
+          normalStrain = dot(strainVector, n),
+          normalStrainComponent = n.map((v) => v * normalStrain),
+          shearStrainComponent = strainVector.map(
+            (v, i) => v - normalStrainComponent[i],
+          );
+        return {
+          index,
+          n,
+          stress,
+          strain,
+          traction,
+          normalStress,
+          normalComponent,
+          shearComponent,
+          shearMag: Math.hypot(...shearComponent),
+          normalStrain,
+          shearStrainMag: Math.hypot(...shearStrainComponent),
+        };
+      }
+      function setPlane3(x, y, z) {
+        PL.nx = x;
+        PL.ny = y;
+        PL.nz = z;
+        draw();
+      }
+      function bindPlaneControls() {
+        ["nx", "ny", "nz"].forEach((k) => {
+          const input = $(`#pl-${k}`);
+          if (!input) return;
+          input.oninput = (e) => {
+            PL[k] = +e.target.value;
+            draw();
+          };
+        });
+        const presets = {
+          "pl-yz": [1, 0, 0],
+          "pl-xz": [0, 1, 0],
+          "pl-xy": [0, 0, 1],
+          "pl-diag": [1, 1, 1],
+        };
+        Object.entries(presets).forEach(([id, n]) => {
+          const b = $(`#${id}`);
+          if (b) b.onclick = () => setPlane3(...n);
+        });
+      }
+      function arrow2(c, a, b, color, label) {
+        const ang = Math.atan2(b[1] - a[1], b[0] - a[0]);
+        c.strokeStyle = c.fillStyle = color;
+        c.lineWidth = 2;
+        c.beginPath();
+        c.moveTo(...a);
+        c.lineTo(...b);
+        c.stroke();
+        c.beginPath();
+        c.moveTo(...b);
+        c.lineTo(
+          b[0] - 9 * Math.cos(ang - 0.45),
+          b[1] - 9 * Math.sin(ang - 0.45),
+        );
+        c.lineTo(
+          b[0] - 9 * Math.cos(ang + 0.45),
+          b[1] - 9 * Math.sin(ang + 0.45),
+        );
+        c.fill();
+        c.font = "11px IBM Plex Sans";
+        c.fillText(label, b[0] + 5, b[1] - 5);
+      }
+      function drawPlaneCanvas(data) {
+        const canvas = $("#planeCanvas");
+        if (!canvas || !data) return;
+        const r = devicePixelRatio || 1,
+          w = canvas.clientWidth,
+          h = 150,
+          c = canvas.getContext("2d");
+        canvas.width = w * r;
+        canvas.height = h * r;
+        c.setTransform(r, 0, 0, r, 0, 0);
+        c.clearRect(0, 0, w, h);
+        const n = data.n,
+          ref = Math.abs(n[0]) < 0.85 ? [1, 0, 0] : [0, 1, 0],
+          u = unitVec3(cross3(n, ref)),
+          v = unitVec3(cross3(n, u)),
+          scale = Math.min(w, h) * 0.28,
+          project = (p) => [
+            w / 2 + (p[0] - p[2] * 0.55) * scale,
+            h / 2 - (p[1] + p[2] * 0.35) * scale,
+          ],
+          corners = [
+            [u[0] + v[0], u[1] + v[1], u[2] + v[2]],
+            [-u[0] + v[0], -u[1] + v[1], -u[2] + v[2]],
+            [-u[0] - v[0], -u[1] - v[1], -u[2] - v[2]],
+            [u[0] - v[0], u[1] - v[1], u[2] - v[2]],
+          ].map(project),
+          o = project([0, 0, 0]);
+        c.fillStyle = "rgba(123,108,240,.28)";
+        c.strokeStyle = "#7b6cf0";
+        c.beginPath();
+        corners.forEach((p, i) => (i ? c.lineTo(...p) : c.moveTo(...p)));
+        c.closePath();
+        c.fill();
+        c.stroke();
+        const drawVec = (vec, color, label, len = 1) => {
+          const m = Math.hypot(...vec);
+          if (m < 1e-10) return;
+          arrow2(c, o, project(vec.map((x) => (x / m) * len)), color, label);
+        };
+        drawVec(n, "#d9dde5", "n", 0.8);
+        drawVec(data.traction, "#ff5d5d", "t", 1.05);
+        drawVec(data.normalComponent, "#62a8ff", "sigma_n", 0.9);
+        drawVec(data.shearComponent, "#ff9f43", "tau", 0.85);
+      }
+      function addPlaneHelper3(data) {
+        if (!data || !TH.a) return;
+        const center = new THREE.Vector3(...elementCenter3(data.index)),
+          n = new THREE.Vector3(...data.n).normalize(),
+          ref =
+            Math.abs(n.x) < 0.85
+              ? new THREE.Vector3(1, 0, 0)
+              : new THREE.Vector3(0, 1, 0),
+          u = new THREE.Vector3().crossVectors(n, ref).normalize(),
+          v = new THREE.Vector3().crossVectors(n, u).normalize(),
+          L = Math.max(8, Math.min(Q.H, Q.W, Q.L / 4) * 0.55),
+          pts = [
+            center.clone().addScaledVector(u, L).addScaledVector(v, L),
+            center.clone().addScaledVector(u, -L).addScaledVector(v, L),
+            center.clone().addScaledVector(u, -L).addScaledVector(v, -L),
+            center.clone().addScaledVector(u, L).addScaledVector(v, -L),
+          ],
+          g = new THREE.BufferGeometry().setFromPoints(pts);
+        g.setIndex([0, 1, 2, 0, 2, 3]);
+        TH.a.add(
+          new THREE.Mesh(
+            g,
+            new THREE.MeshBasicMaterial({
+              color: 0x7b6cf0,
+              transparent: true,
+              opacity: 0.3,
+              side: THREE.DoubleSide,
+              depthWrite: false,
+            }),
+          ),
+        );
+        const addArrow = (vec, color, len) => {
+          const d = new THREE.Vector3(...vec);
+          if (d.length() < 1e-10) return;
+          TH.a.add(
+            new THREE.ArrowHelper(
+              d.normalize(),
+              center,
+              len,
+              color,
+              len / 5,
+              len / 8,
+            ),
+          );
+        };
+        addArrow(data.n, 0xd9dde5, L * 0.9);
+        addArrow(data.traction, 0xff5d5d, L * 1.2);
+        addArrow(data.normalComponent, 0x62a8ff, L);
+        addArrow(data.shearComponent, 0xff9f43, L * 0.95);
+      }
+      function draw3() {
+        if (!TH.r) init3();
+        const gl = $("#gl"),
+          w = gl.clientWidth,
+          h = gl.clientHeight;
+        if (TH.w != w || TH.h != h) {
+          TH.r.setPixelRatio(devicePixelRatio || 1);
+          TH.r.setSize(w, h, false);
+          TH.cam.aspect = w / h;
+          TH.cam.updateProjectionMatrix();
+          TH.w = w;
+          TH.h = h;
+        }
+        const F = Q.field,
+          vals = S3.el.map((e) => (F == "u" ? e.um : e[F]));
+        let lo = Math.min(...vals),
+          hi = Math.max(...vals);
+        if (F == "vm" || F == "u") lo = Math.min(lo, 0);
+        if (hi - lo < 1e-9) hi = lo + 1;
+        const pos = TH.m.geometry.attributes.position,
+          col = TH.m.geometry.attributes.color,
+          tc = new THREE.Color(),
+          wh = new THREE.Color(1, 1, 1);
+        SF.forEach((s, q) => {
+          const n = elNodes(s.e);
+          tc.set(cmap((vals[s.e] - lo) / (hi - lo)));
+          if (s.e === he3) tc.lerp(wh, 0.4);
+          s.fc.forEach((v, k) => {
+            pos.setXYZ(4 * q + k, ...np(n[v]));
+            col.setXYZ(4 * q + k, tc.r, tc.g, tc.b);
+          });
+        });
+        pos.needsUpdate = col.needsUpdate = true;
+        const pp = TH.p.geometry.attributes.position,
+          pc = TH.p.geometry.attributes.color,
+          fl = new Set(f3.map((q) => q.n));
+        for (let n = 0; n < NN3; n++) {
+          pp.setXYZ(n, ...np(n));
+          pc.setXYZ(
+            n,
+            ...(S3.fx[3 * n]
+              ? [0.9, 0.28, 0.3]
+              : n == hn3
+                ? [1, 1, 1]
+                : fl.has(n)
+                  ? [1, 0.62, 0.26]
+                  : [0.5, 0.5, 0.55]),
+          );
+        }
+        pp.needsUpdate = pc.needsUpdate = true;
+        while (TH.a.children.length) TH.a.remove(TH.a.children[0]);
+        for (const q of f3) {
+          const d = new THREE.Vector3(...q.f).normalize(),
+            L = Q.L / 6;
+          TH.a.add(
+            new THREE.ArrowHelper(
+              d,
+              new THREE.Vector3(...np(q.n)).addScaledVector(d, -L),
+              L,
+              0xff9f43,
+              L / 5,
+              L / 8,
+            ),
+          );
+        }
+        addPlaneHelper3(planeResponse3());
+        $("#leg").innerHTML =
+          `<span>${fmt(lo)}</span><div id="bar" style="background:linear-gradient(90deg,${[0, 0.25, 0.5, 0.75, 1].map((t) => cmap(t)).join(",")})"></div><span>${fmt(hi)} ${F == "u" ? "mm" : "MPa"}</span>`;
+        TH.r.render(TH.sc, TH.cam);
+      }
+      function left3(p) {
+        p.innerHTML = "<h3>Geometry & material</h3>";
+        p.append(
+          slider("Length", "L", Q, 100, 400, 10, "mm", run),
+          slider("Height", "H", Q, 10, 80, 2, "mm", run),
+          slider("Width", "W", Q, 10, 80, 2, "mm", run),
+          slider("Young’s modulus", "E", Q, 1000, 300000, 1000, "MPa", run),
+          slider("Poisson ratio", "nu", Q, 0.05, 0.45, 0.01, "", run),
+        );
+        p.insertAdjacentHTML(
+          "beforeend",
+          '<h3 style="margin-top:16px">Mesh pieces</h3>',
+        );
+        p.append(
+          slider("Length pieces", "nx", Q, 6, 18, 1, "", setMesh3),
+          slider("Height pieces", "ny", Q, 2, 8, 1, "", setMesh3),
+          slider("Width pieces", "nz", Q, 2, 8, 1, "", setMesh3),
+        );
+        p.insertAdjacentHTML(
+          "beforeend",
+          '<h3 style="margin-top:16px">Anchor (fixed face)</h3>',
+        );
+        p.append(
+          seg(
+            [
+              ["left", "−X"],
+              ["right", "+X"],
+              ["bottom", "−Y"],
+              ["top", "+Y"],
+            ],
+            () => Q.anchor,
+            (v) => {
+              Q.anchor = v;
+              run();
+            },
+          ),
+        );
+        p.insertAdjacentHTML(
+          "beforeend",
+          '<h3 style="margin-top:16px">Load direction</h3>',
+        );
+        p.append(
+          seg(
+            [
+              ["1,0,0", "+X"],
+              ["-1,0,0", "−X"],
+              ["0,1,0", "+Y"],
+              ["0,-1,0", "−Y"],
+              ["0,0,1", "+Z"],
+              ["0,0,-1", "−Z"],
+            ],
+            () => Q.dir.join(","),
+            (v) => (Q.dir = v.split(",").map(Number)),
+          ),
+        );
+        p.append(
+          slider("Force per click", "F", Q, 50, 5000, 50, "N", () => {}),
+          slider("Deformation scale", "def", Q, 1, 300, 1, "×", draw),
+        );
+        const b = document.createElement("button");
+        b.className = "btn";
+        b.textContent = "Clear loads";
+        b.onclick = () => {
+          f3 = [];
+          run();
+        };
+        p.append(b);
+        p.insertAdjacentHTML(
+          "beforeend",
+          '<p class="note">Hex8 solid, mm–N–MPa, matrix-free PCG. Click a surface node: force. Shift+click: remove.</p>',
+        );
+      }
+      function right3(R, kv) {
+        const el = S3.el,
+          topIndex = el.reduce(
+            (best, e, i) => (e.vm > el[best].vm ? i : best),
+            0,
+          ),
+          top = el[topIndex],
+          selIndex = he3 != null ? he3 : topIndex,
+          sel = el[selIndex],
+          um = Math.max(
+            ...Array.from({ length: NN3 }, (_, n) =>
+              Math.hypot(S3.u[3 * n], S3.u[3 * n + 1], S3.u[3 * n + 2]),
+            ),
+          ),
+          [p1, p2, p3] = sel.p,
+          pr = planeResponse3(selIndex);
+        R.innerHTML = `<div class="sec"><h3>Summary</h3>${kv("Loads applied", f3.length)}${kv("Max von Mises", fmt(top.vm) + " MPa")}${kv("Max displacement", fmt(um) + " mm")}${kv("Solver", S3.it + " PCG iterations")}</div>
+ <div class="sec"><h3>${he3 != null ? "Hovered element" : "Peak-stress element"}</h3>
+ <p class="note">Stress tensor &sigma; (MPa)</p>${matrixHtml(stressTensor3(sel.s))}
+ <p class="note">Strain tensor &epsilon; (&micro;&epsilon;)</p>${matrixHtml(strainTensor3(sel.e), 1e6)}
+ ${kv("&sigma;1 / &sigma;2 / &sigma;3", [p1, p2, p3].map(fmt).join(" / "))}${kv("&tau;max = (&sigma;1-&sigma;3)/2", fmt((p1 - p3) / 2))}${kv("von Mises", fmt(sel.vm))}</div>
+ <div class="sec"><h3>Arbitrary plane</h3>
+ ${planeSliderHtml("nx", "n_x")}${planeSliderHtml("ny", "n_y")}${planeSliderHtml("nz", "n_z")}
+ <div class="seg"><button id="pl-yz">YZ</button><button id="pl-xz">XZ</button><button id="pl-xy">XY</button><button id="pl-diag">Diag</button></div>
+ ${kv("unit n", "[" + pr.n.map((v) => v.toFixed(2)).join(", ") + "]")}
+ ${kv("t = &sigma;n", "[" + pr.traction.map(fmt).join(", ") + "] MPa")}
+ ${kv("&sigma;n / |&tau;|", fmt(pr.normalStress) + " / " + fmt(pr.shearMag) + " MPa")}
+ ${kv("&epsilon;n / shear strain", fmt(pr.normalStrain * 1e6) + " / " + fmt(pr.shearStrainMag * 1e6) + " &micro;&epsilon;")}
+ <canvas id="planeCanvas" class="plane-canvas"></canvas></div>`;
+        bindPlaneControls();
+        drawPlaneCanvas(pr);
+      }
+    </script>
+  </body>
+</html>
