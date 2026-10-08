@@ -1,0 +1,11 @@
+numpy
+scipy
+scikit-fem>=8
+meshio
+pytest
+# app
+pyvista
+trame
+trame-vtk
+trame-vuetify
+# later: gmsh
