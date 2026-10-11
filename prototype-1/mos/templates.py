@@ -181,4 +181,43 @@ support  root_pin xyz
 support  mid_roll y
 force    tip_pt   0, -P, 0
 """,
+    "CAD - Structural L-Bracket (STEP)": """\
+# Structural L-bracket imported from a STEP CAD file
+# Meshed automatically into 3D tetrahedral elements via Gmsh
+mesh     step cad_models/bracket.step 0.6
+material E = 200e9, nu = 0.3, rho = 7850
+
+support  cad_face_1 xyz
+traction cad_face_6 0, -1e6, 0
+""",
+    "CAD - Stepped Shaft Torsion (STEP)": """\
+# Stepped shaft imported from a STEP CAD file
+# Fixed at root face, pure torque applied at tip face
+mesh     step cad_models/shaft.step 0.4
+material E = 210e9, nu = 0.3, rho = 7850
+
+support  cad_face_1 xyz
+moment   cad_face_2 1000, 0, 0
+""",
+    "CAD - Plate with Hole (STEP)": """\
+# Tensile plate with circular hole imported from STEP
+# Stress concentration benchmark (Kirsch problem)
+mesh     step cad_models/plate_hole.step 0.35
+material E = 70e9, nu = 0.33, rho = 2700
+
+region   left_face  facets x < 1e-6
+region   right_face facets x > 6.0 - 1e-6
+
+support  left_face  xyz
+traction right_face 1e7, 0, 0
+""",
+    "CAD - Image to STEP Drawing Profile": """\
+# Extruded profile generated directly from a 2D drawing / sketch
+mesh     step cad_models/drawing_extruded.step 0.25
+material E = 200e9, nu = 0.3, rho = 7850
+
+support  cad_face_1 xyz
+traction cad_face_2 0, -5e5, 0
+""",
 }
+

@@ -17,8 +17,11 @@ support fixed xyz
 
 
 def _mesh(spec):
-    _, L, H, W, nx, ny, nz, _ = spec.mesh
-    return fakemesh.box(L, H, W, nx, ny, nz)
+    if spec.mesh[0] == "box":
+        _, L, H, W, nx, ny, nz, _ = spec.mesh
+        return fakemesh.box(L, H, W, nx, ny, nz)
+    from mos.core.spec import make_mesh
+    return make_mesh(spec)
 
 
 def _fails(text, fragment, build_it=False):
@@ -85,6 +88,12 @@ def test_support_components_and_values():
     model, _ = build(spec, _mesh(spec))
     assert model.bcs[1].components == (1,) and model.bcs[1].value == -0.5
     assert model.bcs[2].components == (0, 2) and model.bcs[2].value == 0.0
+
+
+def test_support_region_names_with_cad_face_tokens():
+    spec = parse_spec("mesh box 1 1 1 2 2 2\nmaterial E=1, nu=0.3, rho=0\nsupport +x xyz\nsupport face-1 y\n")
+    assert spec.supports[0][1] == "+x"
+    assert spec.supports[1][1] == "face-1"
 
 
 def test_error_messages():

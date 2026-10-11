@@ -23,6 +23,10 @@ scene with PyVista (VTK) and streams it to a browser tab.
    * *Fixed-fixed beam - uniform load*
    * *Cantilever - point force and custom axis moment*
    * *Overhanging beam - tip and span loads*
+   * *CAD - Structural L-Bracket (STEP)*
+   * *CAD - Stepped Shaft Torsion (STEP)*
+   * *CAD - Plate with Hole (STEP)*
+   * *CAD - Image to STEP Drawing Profile*
 2. Press **Solve**. The status panel shows the cell and DOF counts, the maximum displacement and
    von Mises stress, the total reaction, and the equilibrium error. The status turns green when the
    equilibrium error is below 1e-6 and amber otherwise; errors in the model text are shown in red

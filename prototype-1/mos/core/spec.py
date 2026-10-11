@@ -31,7 +31,7 @@ from .fields import (Field, RESERVED, compile_predicate, eval_constant,
 from .loads import BodyForce, Moment, PointForce, Pressure, Traction
 from .material import Material
 from .model import BC, LoadCase, Model
-from .regions import facets_where, nearest_node, nodes_where
+from .regions import Region, facets_where, nearest_node, nodes_where
 
 
 class SpecError(ValueError):
@@ -73,7 +73,7 @@ def _three(s: str, spec: Spec, what: str) -> list:
 
 
 def _region_and_rest(rest: str, what: str):
-    m = re.fullmatch(r"(\w+)\s+(.+)", rest)
+    m = re.fullmatch(r"([^\s]+)\s+(.+)", rest)
     if not m:
         raise SpecError(f"{what} REGION <values>")
     return m.group(1), m.group(2)
@@ -97,6 +97,13 @@ def _h_mesh(spec, rest, n):
         if not arg:
             raise SpecError("mesh file PATH")
         spec.mesh = ("file", arg)
+    elif kind == "step":
+        if not arg:
+            raise SpecError("mesh step PATH [mesh_size]")
+        toks = arg.split(None, 1)
+        step_path = toks[0]
+        ms = float(eval_constant(toks[1], **spec.params)) if len(toks) > 1 else None
+        spec.mesh = ("step", step_path, ms)
     elif kind == "box":
         toks = arg.split()
         elem = toks.pop().lower() if toks and toks[-1].lower() in ("tet", "hex") else "tet"
@@ -108,7 +115,7 @@ def _h_mesh(spec, rest, n):
         nx, ny, nz = (_int(eval_constant(t, **spec.params), "element count") for t in toks[3:])
         spec.mesh = ("box", L, H, W, nx, ny, nz, elem)
     else:
-        raise SpecError("mesh box L H W nx ny nz [tet|hex]   or   mesh file PATH")
+        raise SpecError("mesh box L H W nx ny nz [tet|hex]   or   mesh file PATH   or   mesh step PATH [mesh_size]")
 
 
 def _h_material(spec, rest, n):
@@ -126,7 +133,7 @@ def _h_material(spec, rest, n):
 
 
 def _h_region(spec, rest, n):
-    m = re.fullmatch(r"(\w+)\s+(nodes|facets|nearest)\s+(.+)", rest, flags=re.I)
+    m = re.fullmatch(r"([^\s]+)\s+(nodes|facets|nearest)\s+(.+)", rest, flags=re.I)
     if not m:
         raise SpecError("region NAME nodes|facets <condition>   or   region NAME nearest x, y, z")
     name, kind, arg = m.group(1), m.group(2).lower(), m.group(3)
@@ -140,7 +147,7 @@ def _h_region(spec, rest, n):
 
 
 def _h_support(spec, rest, n):
-    m = re.fullmatch(r"(\w+)(?:\s+([xyzXYZ]+))?(?:\s*=\s*(.+))?", rest)
+    m = re.fullmatch(r"([^\s]+)(?:\s+([xyzXYZ]+))?(?:\s*=\s*(.+))?", rest)
     if not m:
         raise SpecError("support REGION [xyz] [= value]")
     region, comps, value = m.group(1), m.group(2), m.group(3)
@@ -237,6 +244,17 @@ def make_mesh(spec: Spec):
         from .meshes import box_mesh
         _, L, H, W, nx, ny, nz, elem = spec.mesh
         return box_mesh(L, H, W, nx, ny, nz, kind=elem)
+    elif spec.mesh[0] == "step":
+        from .cad import load_step_mesh
+        _, step_path, ms = spec.mesh
+        m, _, _ = load_step_mesh(step_path, mesh_size=ms)
+        return m
+    elif spec.mesh[0] == "file":
+        from .cad import is_step_file, load_step_mesh
+        path = spec.mesh[1]
+        if is_step_file(path):
+            m, _, _ = load_step_mesh(path)
+            return m
     from skfem import Mesh
     return Mesh.load(spec.mesh[1])
 
@@ -261,8 +279,10 @@ def build(spec: Spec, mesh=None):
         regions[name] = reg
 
     def get(n, name):
-        """Look up a region by name, or raise SpecError naming line n."""
+        """Look up a region by name, or check named mesh boundaries, or raise SpecError naming line n."""
         if name not in regions:
+            if hasattr(mesh, "boundaries") and mesh.boundaries and name in mesh.boundaries:
+                return Region(name, "facets", mesh.boundaries[name])
             raise SpecError(f"line {n}: unknown region '{name}' (defined: {', '.join(regions) or 'none'})")
         return regions[name]
 
@@ -280,7 +300,26 @@ def build(spec: Spec, mesh=None):
                 elif kind == "pressure":
                     loads.append(Pressure(get(n, r), payload))
                 else:
-                    loads.append(Moment(get(n, r), payload[0], payload[1]))
+                    reg = get(n, r)
+                    origin = payload[1]
+                    if reg.kind == "nodes":
+                        # If moment is applied to a node region (e.g. nearest point), adapt to adjacent boundary surface patch
+                        bf = np.asarray(mesh.boundary_facets())
+                        if len(bf) > 0 and hasattr(mesh, "facets") and mesh.facets is not None:
+                            tri_nodes = mesh.facets[:, bf]
+                            has_node = np.isin(tri_nodes, reg.ids).any(axis=0)
+                            cand_bf = bf[has_node]
+                            if len(cand_bf) > 0:
+                                if origin is None:
+                                    origin = np.mean(mesh.p[:, reg.ids], axis=1)
+                                patch_reg = Region(f"{r}_patch", "facets", cand_bf)
+                                loads.append(Moment(patch_reg, payload[0], origin))
+                            else:
+                                loads.append(Moment(reg, payload[0], origin))
+                        else:
+                            loads.append(Moment(reg, payload[0], origin))
+                    else:
+                        loads.append(Moment(reg, payload[0], origin))
             except SpecError:
                 raise
             except ValueError as e:

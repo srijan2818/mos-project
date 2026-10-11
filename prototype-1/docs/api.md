@@ -391,13 +391,13 @@ Point on the clip plane at fraction `frac` of the bounding box along `axis`.
 
 scikit-fem mesh -> pyvista UnstructuredGrid (same node order as mesh.p).
 
-### `face_definitions(bounds) -> dict`
+### `face_definitions(bounds, mesh=None) -> dict`
 
 Dictionary of standard bounding faces: key -> {name, normal, centroid, center, direction, i_size, j_size}.
 
-### `create_face_mesh(face_key: str, bounds)`
+### `create_face_mesh(face_key: str, bounds, mesh=None)`
 
-PyVista Plane geometry representing the specified bounding face.
+PyVista geometry representing the specified bounding face.
 
 ### `scalar_bar_args(title: str, is_dark: bool=True) -> dict`
 
@@ -409,7 +409,7 @@ PyVista Arrow mesh aligned with vector and scaled relative to model_size.
 
 ### `create_moment_glyph(origin, M_vec, model_size: float)`
 
-PyVista Arrow mesh visualizing a moment about an axis at origin.
+PyVista mesh visualizing a moment about an axis at origin with curved arc and arrow.
 
 ### `build_load_glyphs(case, mesh, model_size: float)`
 
@@ -428,7 +428,7 @@ Draws:
 
 Example model descriptions shown in the app's 'Load example' menu.
 
-`TEMPLATES` maps each menu name to a model description: *Cantilever - tip load*, *Cantilever - self weight*, *Bar - torsion*, *Cantilever - partial pressure*, *Simply supported - center load*, *Cantilever - pure end moment*, *Bar - axial tension*, *Fixed-fixed beam - uniform load*, *Cantilever - point force and custom axis moment*, *Overhanging beam - tip and span loads*.
+`TEMPLATES` maps each menu name to a model description: *Cantilever - tip load*, *Cantilever - self weight*, *Bar - torsion*, *Cantilever - partial pressure*, *Simply supported - center load*, *Cantilever - pure end moment*, *Bar - axial tension*, *Fixed-fixed beam - uniform load*, *Cantilever - point force and custom axis moment*, *Overhanging beam - tip and span loads*, *CAD - Structural L-Bracket (STEP)*, *CAD - Stepped Shaft Torsion (STEP)*, *CAD - Plate with Hole (STEP)*, *CAD - Image to STEP Drawing Profile*.
 
 ## `mos.app.main`
 
@@ -437,8 +437,8 @@ trame + PyVista front end.
 
     python -m mos.app [--spec model.mos] [--port 8080]
 
-The drawer holds the model description (see mos/core/spec.py), interactive load tools,
-and view controls; the 3D view is a server-side-rendered VTK scene.
+The drawer holds interactive geometric/CAD model builders, materials, supports,
+loads, and view controls; the 3D view is a server-side-rendered VTK scene.
 ```
 
 ### `main(argv=None)`

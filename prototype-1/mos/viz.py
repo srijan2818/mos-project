@@ -59,12 +59,12 @@ def to_pyvista(mesh):
 
 # ------------------------------------------------------------------ face helpers
 
-def face_definitions(bounds) -> dict:
+def face_definitions(bounds, mesh=None) -> dict:
     """Dictionary of standard bounding faces: key -> {name, normal, centroid, center, direction, i_size, j_size}."""
     xmin, xmax, ymin, ymax, zmin, zmax = bounds
     dx, dy, dz = xmax - xmin, ymax - ymin, zmax - zmin
     cx, cy, cz = 0.5 * (xmin + xmax), 0.5 * (ymin + ymax), 0.5 * (zmin + zmax)
-    return {
+    defs = {
         "+x": {"name": "+X (Tip / Right)", "normal": np.array([1.0, 0.0, 0.0]),
                "centroid": np.array([xmax, cy, cz]), "center": (xmax, cy, cz),
                "direction": (1.0, 0.0, 0.0), "i_size": dy, "j_size": dz},
@@ -84,20 +84,53 @@ def face_definitions(bounds) -> dict:
                "centroid": np.array([cx, cy, zmin]), "center": (cx, cy, zmin),
                "direction": (0.0, 0.0, -1.0), "i_size": dx, "j_size": dy},
     }
+    if mesh is not None and hasattr(mesh, "boundaries") and mesh.boundaries:
+        for b_name, fac_ids in mesh.boundaries.items():
+            if len(fac_ids) == 0:
+                continue
+            pts = mesh.p[:, mesh.facets[:, fac_ids]].reshape(3, -1)
+            c = pts.mean(axis=1)
+            tri_v = mesh.p[:, mesh.facets[:, fac_ids]]
+            v1 = tri_v[:, 1, :] - tri_v[:, 0, :]
+            v2 = tri_v[:, 2, :] - tri_v[:, 0, :]
+            normals = np.cross(v1, v2, axis=0)
+            mean_n = normals.sum(axis=1)
+            n_norm = np.linalg.norm(mean_n)
+            n_vec = mean_n / n_norm if n_norm > 1e-12 else np.array([1.0, 0.0, 0.0])
+
+            tag_part = b_name.replace("cad_face_", "Face ")
+            defs[b_name] = {
+                "name": tag_part,
+                "normal": n_vec,
+                "centroid": c,
+                "center": tuple(c),
+                "direction": tuple(n_vec),
+                "i_size": max(dx, dy, dz) * 0.2,
+                "j_size": max(dx, dy, dz) * 0.2,
+                "facet_ids": fac_ids,
+            }
+    return defs
 
 
-def create_face_mesh(face_key: str, bounds):
-    """PyVista Plane geometry representing the specified bounding face."""
+def create_face_mesh(face_key: str, bounds, mesh=None):
+    """PyVista geometry representing the specified bounding face."""
     import pyvista as pv
+    if mesh is not None and hasattr(mesh, "boundaries") and mesh.boundaries and face_key in mesh.boundaries:
+        fac_ids = mesh.boundaries[face_key]
+        if len(fac_ids) > 0:
+            triangles = mesh.facets[:, fac_ids].T
+            faces_pv = np.hstack([np.full((len(fac_ids), 1), 3), triangles]).ravel()
+            return pv.PolyData(mesh.p.T, faces_pv)
+
     plane_fn = getattr(pv, "Plane", None)
     if plane_fn is None:
         return None
-    faces = face_definitions(bounds)
+    faces = face_definitions(bounds, mesh)
     if face_key not in faces:
         return None
     info = faces[face_key]
     return plane_fn(center=info["center"], direction=info["direction"],
-                    i_size=info["i_size"], j_size=info["j_size"])
+                    i_size=info.get("i_size", 1.0), j_size=info.get("j_size", 1.0))
 
 
 # ------------------------------------------------------------------ scalar bar theming
@@ -146,23 +179,66 @@ def create_arrow_glyph(origin, vector, model_size: float):
 
 
 def create_moment_glyph(origin, M_vec, model_size: float):
-    """PyVista Arrow mesh visualizing a moment about an axis at origin."""
+    """PyVista mesh visualizing a moment about an axis at origin with curved arc and arrow."""
     import pyvista as pv
-    arrow_fn = getattr(pv, "Arrow", None)
-    if arrow_fn is None:
-        return None
     m = np.asarray(M_vec, float)
     norm = np.linalg.norm(m)
     if norm < 1e-12:
         return None
-    direction = m / norm
+    axis = m / norm
     length = max(0.20 * model_size, 1e-4)
-    start = np.asarray(origin, float) - 0.25 * length * direction
+    radius = 0.5 * length
+
+    # Find two orthonormal vectors perpendicular to the moment axis
+    if abs(axis[0]) < 0.8:
+        v1 = np.cross(axis, [1, 0, 0])
+    else:
+        v1 = np.cross(axis, [0, 1, 0])
+    v1 = v1 / np.linalg.norm(v1)
+    v2 = np.cross(axis, v1)
+    v2 = v2 / np.linalg.norm(v2)
+
     try:
-        return arrow_fn(start=start, direction=direction, scale=length,
-                        tip_length=0.32, tip_radius=0.12, shaft_radius=0.05)
+        # 270 degree circular arc indicating rotation direction
+        theta = np.linspace(0, 1.4 * np.pi, 28)
+        o = np.asarray(origin, float)
+        arc_pts = np.array([
+            o + radius * (np.cos(t) * v1 + np.sin(t) * v2) for t in theta
+        ])
+        tube_r = max(0.015 * length, 1e-5)
+        arc_spline = pv.Spline(arc_pts, 80).tube(radius=tube_r)
+
+        # Arrowhead at arc endpoint pointing along tangent
+        last_t = theta[-1]
+        tangent = -np.sin(last_t) * v1 + np.cos(last_t) * v2
+        arrow_head = pv.Arrow(
+            start=arc_pts[-1] - 0.25 * (0.35 * length) * tangent,
+            direction=tangent,
+            scale=0.35 * length,
+            tip_length=0.35,
+            tip_radius=0.12,
+            shaft_radius=0.04,
+        )
+
+        # Also add central axis arrow
+        axis_arr = pv.Arrow(
+            start=o - 0.15 * length * axis,
+            direction=axis,
+            scale=0.8 * length,
+            tip_length=0.25,
+            tip_radius=0.08,
+            shaft_radius=0.03,
+        )
+        return arc_spline + arrow_head + axis_arr
     except Exception:
-        return None
+        # Fallback to single straight arrow
+        try:
+            arrow_fn = getattr(pv, "Arrow", None)
+            start = np.asarray(origin, float) - 0.25 * length * axis
+            return arrow_fn(start=start, direction=axis, scale=length,
+                            tip_length=0.32, tip_radius=0.12, shaft_radius=0.05)
+        except Exception:
+            return None
 
 
 def _region_centroid_direct(region, mesh) -> np.ndarray:
@@ -229,7 +305,11 @@ def build_load_glyphs(case, mesh, model_size: float):
 
             elif isinstance(load, Moment):
                 origin = _region_centroid_direct(load.region, mesh)
-                _add_arrow(origin, load.M, arrow_len * 1.1, "#a855f7")
+                mg = create_moment_glyph(origin, load.M, model_size)
+                if mg is not None:
+                    glyphs.append((mg, "#a855f7"))
+                else:
+                    _add_arrow(origin, load.M, arrow_len * 1.1, "#a855f7")
 
             elif isinstance(load, BodyForce):
                 try:

@@ -24,16 +24,22 @@ earlier params but not `x y z`, and must be finite (`1/0` is an error).
 ```text
 mesh box L H W nx ny nz [tet|hex]
 mesh file PATH
+mesh step PATH [mesh_size]
 ```
 
 `box` generates a beam along x: x in [0, L], y in [-H/2, H/2], z in [-W/2, W/2], with `nx`, `ny`,
 `nz` cells in each direction (positive integers). `tet` (default) splits each cell into
 tetrahedra; `hex` keeps hexahedra. Numbers may be expressions without spaces (`L/2`).
 
+`step` imports a general CAD STEP file (`.step` or `.stp`) using Gmsh (OpenCASCADE) and generates a 3D
+tetrahedral volume mesh. Each boundary CAD surface is automatically tagged as a named boundary
+(`cad_face_1`, `cad_face_2`, ...), directly usable in supports, tractions, pressures, and moments.
+Optional `mesh_size` controls the target characteristic element size.
+
 `file` loads a volume mesh through scikit-fem's meshio reader (e.g. `.msh`, `.vtk`, `.vtu`,
-`.xdmf`); the path is the rest of the line, so it may contain spaces. This path has not yet been
-run against real mesh files, so treat it as experimental. Surface-only meshes (an STL) are not enough: remesh
-the volume first. The mesh is solved with quadratic elements (see [theory.md](theory.md)).
+`.xdmf`); if the file is a `.step` or `.stp` file, it is automatically routed through the CAD STEP mesher.
+Surface-only meshes (an STL) are not enough: remesh the volume first. The mesh is solved with quadratic
+elements (see [theory.md](theory.md)).
 
 ### `material`
 
