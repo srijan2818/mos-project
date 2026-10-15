@@ -7,6 +7,7 @@ loads, and view controls; the 3D view is a server-side-rendered VTK scene.
 """
 from __future__ import annotations
 
+import json
 import re
 import traceback
 from pathlib import Path
@@ -82,6 +83,18 @@ def _safe_region_name(face_name: str, prefix: str = "reg") -> str:
     if token[0].isdigit():
         token = f"{prefix}_{token}"
     return token
+
+
+def _unique_region_name(text: str, stem: str) -> str:
+    """Choose a spec region name not already declared in user or generated text."""
+    declared = {m.group(1) for m in re.finditer(
+        r"^\s*region\s+([^\s#]+)", text, flags=re.IGNORECASE | re.MULTILINE)}
+    root = _safe_region_name(stem, "ui_region")
+    candidate, index = f"ui_{root}", 1
+    while candidate in declared:
+        candidate = f"ui_{root}_{index}"
+        index += 1
+    return candidate
 
 
 def _resolved_face_name(face_name: str, mesh_ref=None) -> str:
@@ -358,9 +371,16 @@ def main(argv=None):
 
         # 1. Mesh
         if state.geom_mode == "step":
-            step_file = state.cad_custom_path if state.cad_preset == "custom" else state.cad_preset
+            if state.cad_preset == "custom":
+                step_file = str(state.cad_custom_path).strip()
+            else:
+                # Resolve bundled examples relative to the project, not the launch CWD.
+                project_root = Path(__file__).resolve().parents[2]
+                step_file = str((project_root / state.cad_preset).resolve())
+            # JSON quoting preserves spaces and Windows path separators in the spec.
+            step_file_token = json.dumps(step_file)
             ms = f" {state.cad_mesh_size:.3g}" if state.cad_mesh_size else ""
-            lines.append(f"mesh     step {step_file}{ms}")
+            lines.append(f"mesh     step {step_file_token}{ms}")
         else:
             lines.append(f"param L = {state.box_L}")
             lines.append(f"param H = {state.box_H}")
@@ -408,7 +428,7 @@ def main(argv=None):
                         if not face.startswith("cad_face_"):
                             lines.append(f"region   {reg} facets {_face_condition(face, bounds)}")
                     if mode == "force":
-                        lines.append(f"traction {reg} {ld.get('vec', '0, -1e5, 0')}")
+                        lines.append(f"force    {reg} {ld.get('vec', '0, -1e5, 0')}")
                     elif mode == "pressure":
                         lines.append(f"pressure {reg} {ld.get('val', '1e6')}")
                     elif mode == "moment":
@@ -443,11 +463,12 @@ def main(argv=None):
 
         if state.load_target == "face":
             face = _resolved_face_name(state.selected_face, mesh_ref)
-            reg_id = face if face.startswith("cad_face_") else _safe_region_name(face, "face")
+            reg_id = face if face.startswith("cad_face_") else _unique_region_name(
+                state.spec_text, f"load_{face}_{len(state.loads_list)}")
             if not face.startswith("cad_face_"):
                 lines.append(f"region   {reg_id} facets {_face_condition(face, bounds)}")
             if state.load_mode == "force":
-                lines.append(f"traction {reg_id} {state.force_vec}")
+                lines.append(f"force    {reg_id} {state.force_vec}")
             elif state.load_mode == "pressure":
                 lines.append(f"pressure {reg_id} {state.pressure_val}")
             else:
@@ -456,17 +477,20 @@ def main(argv=None):
         else:
             px, py, pz = float(state.point_x), float(state.point_y), float(state.point_z)
             if state.load_mode == "force":
-                lines.append(f"region   pt_applied nearest {px:.4g}, {py:.4g}, {pz:.4g}")
-                lines.append(f"force    pt_applied {state.force_vec}")
+                pt_reg = _unique_region_name(state.spec_text, f"point_{len(state.loads_list)}")
+                lines.append(f"region   {pt_reg} nearest {px:.4g}, {py:.4g}, {pz:.4g}")
+                lines.append(f"force    {pt_reg} {state.force_vec}")
             elif state.load_mode == "pressure":
                 face = _resolved_face_name(state.selected_face, mesh_ref)
-                reg_id = face if face.startswith("cad_face_") else _safe_region_name(face, "face")
+                reg_id = face if face.startswith("cad_face_") else _unique_region_name(
+                    state.spec_text, f"load_{face}_{len(state.loads_list)}")
                 if not face.startswith("cad_face_"):
                     lines.append(f"region   {reg_id} facets {_face_condition(face, bounds)}")
                 lines.append(f"pressure {reg_id} {state.pressure_val}")
             else:
                 face = _resolved_face_name(state.selected_face, mesh_ref)
-                reg_id = face if face.startswith("cad_face_") else _safe_region_name(face, "face")
+                reg_id = face if face.startswith("cad_face_") else _unique_region_name(
+                    state.spec_text, f"load_{face}_{len(state.loads_list)}")
                 if not face.startswith("cad_face_"):
                     lines.append(f"region   {reg_id} facets {_face_condition(face, bounds)}")
                 mv = _get_moment_vector(state, bounds, mesh_ref)
@@ -519,6 +543,11 @@ def main(argv=None):
             state.kpi_max_vm = f"{max_vm:.3f} {state.stress_unit}"
             state.kpi_max_u = f"{umax * 1e3:.3f} mm"
             state.kpi_reactions = f"[{rx:.3g}, {ry:.3g}, {rz:.3g}] N"
+            a = np.asarray(getattr(res, "translational_acceleration", np.zeros(3)), float)
+            alpha = np.asarray(getattr(res, "angular_acceleration", np.zeros(3)), float)
+            state.kpi_acceleration = (f"a=[{a[0]:.3g}, {a[1]:.3g}, {a[2]:.3g}] m/s²; "
+                                      f"α=[{alpha[0]:.3g}, {alpha[1]:.3g}, {alpha[2]:.3g}] rad/s²"
+                                      if getattr(res, "body_fixed_frame", False) else "Supported body")
             state.kpi_mesh = f"{S.grid.n_cells} cells, {S.grid.n_points} nodes ({n_dof} DOFs)"
             state.kpi_error = f"{res.equilibrium_error:.2e}"
             state.max_u_str = f"Max deflection: {umax * 1e3:.4g} mm"
@@ -545,15 +574,15 @@ def main(argv=None):
         _update_preview_snippet()
         bounds = tuple(state.model_bounds)
         mesh_ref = S.model.mesh if S.model else None
-        mv = _get_moment_vector(state, bounds, mesh_ref)
+        mv = _get_moment_vector(state, bounds, mesh_ref) if state.load_mode == "moment" else None
 
         new_ld = {
             "mode": state.load_mode,
             "target": state.load_target,
             "face": state.selected_face,
             "pt": (float(state.point_x), float(state.point_y), float(state.point_z)),
-            "vec": state.force_vec if state.load_mode == "force" else
-                   f"{mv[0]:.4g}, {mv[1]:.4g}, {mv[2]:.4g}",
+            "vec": (state.force_vec if state.load_mode == "force" else
+                    f"{mv[0]:.4g}, {mv[1]:.4g}, {mv[2]:.4g}" if mv is not None else ""),
             "val": state.pressure_val,
         }
         state.loads_list = list(state.loads_list) + [new_ld]
@@ -719,6 +748,7 @@ def main(argv=None):
         "max_u_str": "",
         "kpi_max_vm": "—", "kpi_max_u": "—",
         "kpi_reactions": "—", "kpi_mesh": "—", "kpi_error": "—",
+        "kpi_acceleration": "—",
         # View toggles
         "show_edges": True,
         "clip_axis": "none", "clip_axes": ["none", "x", "y", "z"],
@@ -764,7 +794,7 @@ def main(argv=None):
         # Pressure
         "pressure_val": "1e6",
         # Preview
-        "load_preview_snippet": "traction face_pos_x 0, -1e5, 0",
+        "load_preview_snippet": "force face_pos_x 0, -1e5, 0",
         "model_bounds": [0, 10, -0.5, 0.5, -0.5, 0.5],
     })
 
@@ -1276,6 +1306,7 @@ def main(argv=None):
 
                                 for txt_label, txt_state in [
                                     ("Total Reactions", "kpi_reactions"),
+                            ("Body-Fixed Acceleration", "kpi_acceleration"),
                                     ("Equilibrium Residual", "kpi_error"),
                                     ("Mesh Statistics", "kpi_mesh"),
                                 ]:

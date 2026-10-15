@@ -1,10 +1,18 @@
 """Spec parsing and model building, using a numpy mesh (no scikit-fem needed)."""
 import numpy as np
 
-from mos.core.loads import BodyForce, Moment, PointForce, Pressure, Traction
+from mos.core.loads import BodyForce, Moment, PointForce, Pressure, SurfaceForce, Traction
 from mos.core.spec import SpecError, build, parse_spec
 from mos.templates import TEMPLATES
 from tests import fakemesh
+from mos.core.cad import HAS_GMSH
+
+try:
+    from skfem import MeshTet as _MeshTet  # noqa: F401
+    HAS_SKFEM = True
+except ImportError:
+    HAS_SKFEM = False
+HAS_CAD_STACK = HAS_GMSH and HAS_SKFEM
 
 BASE = """\
 param L = 4
@@ -44,6 +52,10 @@ def test_fake_mesh_is_a_valid_tet_mesh():
 def test_all_templates_parse_and_build():
     for name, text in TEMPLATES.items():
         spec = parse_spec(text)
+        if spec.mesh[0] != "box" and not HAS_CAD_STACK:
+            # The text templates can be parsed offline; STEP meshing needs the CAD stack.
+            assert spec.mesh[0] in ("step", "file"), name
+            continue
         model, case = build(spec, _mesh(spec))
         assert case.loads and model.bcs, name
 
@@ -80,14 +92,28 @@ body 0, -rho*9.81, 0
     assert np.allclose(case.loads[5].M, [100, 0, 0])
     assert np.allclose(case.loads[6].M, [0, 200, 0])
     assert np.allclose(case.loads[6].origin, [4, 0, 0])
-    assert case.loads[2].p(np.array([[1.0, 3.0], [0, 0], [0, 0]])).tolist() == [0.0, 100.0]
+    assert np.allclose(case.loads[2].p(np.array([[1.0, 3.0], [0, 0], [0, 0]])), [0.0, 100.0], atol=1e-12, rtol=0.0)
 
 
 def test_support_components_and_values():
     spec = parse_spec(BASE + "region pt nearest L, 0, 0\nsupport pt y = -0.5\nsupport pt xz\n")
     model, _ = build(spec, _mesh(spec))
-    assert model.bcs[1].components == (1,) and model.bcs[1].value == -0.5
-    assert model.bcs[2].components == (0, 2) and model.bcs[2].value == 0.0
+    assert model.bcs[1].components == (1,) and abs(model.bcs[1].value - (-0.5)) < 1e-12
+    assert model.bcs[2].components == (0, 2) and abs(model.bcs[2].value - 0.0) < 1e-12
+
+
+def test_force_on_facet_region_is_a_total_surface_force():
+    text = BASE + "force tip 0, -10, 0\n"
+    model, case = build(parse_spec(text), _mesh(parse_spec(text)))
+    assert isinstance(case.loads[0], SurfaceForce)
+    assert case.loads[0].force.tolist() == [0.0, -10.0, 0.0]
+
+
+def test_support_free_model_is_valid_for_body_fixed_analysis():
+    text = "mesh box 1 1 1 2 2 2\nmaterial E=1e9, nu=0.3, rho=1000\n"
+    spec = parse_spec(text)
+    model, case = build(spec, fakemesh.box(1, 1, 1, 2, 2, 2))
+    assert model.bcs == [] and case.loads == []
 
 
 def test_support_region_names_with_cad_face_tokens():
@@ -102,13 +128,11 @@ def test_error_messages():
     _fails(BASE + "region mid facets abs(x - 100) < 1e-9\n", "region 'mid' is empty", True)
     _fails(BASE + "region bad facets x + 1\n", "not a condition")
     _fails(BASE + "traction tip 0, 0\n", "needs 3")
-    _fails(BASE + "force tip 0, -1, 0\n", "needs a node region", True)
     _fails(BASE + "region tip facets x > 0\n", "already defined")
     _fails(BASE + "param x = 3\n", "reserved")
     _fails(BASE + "support tip y = 1 \nsupport tip = 2\n", "which components")
     _fails(BASE + "moment tip 0, 0, 1 about 1, 2\n", "needs 3")
     _fails(BASE + "moment tip axis 0, 0, 0 mag 10\n", "zero vector")
-    _fails("mesh box 1 1 1 2 2 2\nmaterial E=1, nu=0.3\n", "no 'support'")
     _fails("material E=1, nu=0.3\nsupport a xyz\n", "no 'mesh'")
     _fails("mesh box 1 1 1 2.5 2 2\n", "positive integer")
     _fails("mesh box 1 1 1 2 2 2\nmaterial E=1, nu=0.7\n", "nu")
@@ -117,7 +141,8 @@ def test_error_messages():
 
 def test_comments_blank_lines_and_params_in_order():
     spec = parse_spec("# c\n\nparam a = 2\nparam b = a*3   # six\n" + BASE.replace("param L = 4\n", "param L = b - 2\n"))
-    assert spec.params["b"] == 6 and spec.mesh[1] == 4.0
+    assert spec.params["b"] == 6
+    assert abs(spec.mesh[1] - 4.0) < 1e-12
 
 
 def test_more_parse_errors():

@@ -5,7 +5,7 @@ is a comment; blank lines are ignored; directive names are not case sensitive. O
 a `param` must come before it is used, a `region` before the supports and loads that name it, and
 `material` before an expression that uses `rho`.
 
-A model needs exactly these: one `mesh`, one `material`, and at least one `support`.
+A model needs exactly one `mesh` and one `material`. Supports are optional: if none are specified, the solver treats the model as a free body in an instantaneously non-rotating body-fixed frame. This is a quasi-static acceleration-corrected analysis, not transient dynamics; see [theory.md](theory.md).
 
 ## Directives
 
@@ -25,6 +25,7 @@ earlier params but not `x y z`, and must be finite (`1/0` is an error).
 mesh box L H W nx ny nz [tet|hex]
 mesh file PATH
 mesh step PATH [mesh_size]
+mesh step "path with spaces/part.step" [mesh_size]
 ```
 
 `box` generates a beam along x: x in [0, L], y in [-H/2, H/2], z in [-W/2, W/2], with `nx`, `ny`,
@@ -34,7 +35,8 @@ tetrahedra; `hex` keeps hexahedra. Numbers may be expressions without spaces (`L
 `step` imports a general CAD STEP file (`.step` or `.stp`) using Gmsh (OpenCASCADE) and generates a 3D
 tetrahedral volume mesh. Each boundary CAD surface is automatically tagged as a named boundary
 (`cad_face_1`, `cad_face_2`, ...), directly usable in supports, tractions, pressures, and moments.
-Optional `mesh_size` controls the target characteristic element size.
+Optional `mesh_size` controls the target characteristic element size. Paths with spaces may be
+quoted; unquoted `.step` / `.stp` paths with spaces are also recognized.
 
 `file` loads a volume mesh through scikit-fem's meshio reader (e.g. `.msh`, `.vtk`, `.vtu`,
 `.xdmf`); if the file is a `.step` or `.stp` file, it is automatically routed through the CAD STEP mesher.
@@ -79,15 +81,16 @@ Fixes displacement components on a region. With no components all of `x y z` are
 `support right y = -0.002` prescribes a displacement. Components are any letters of `xyz`; a
 value requires them to be named.
 
-The supports must remove all six rigid-body motions of the body, or the stiffness matrix is
-singular. Symptoms of an under-constrained model: enormous displacements or a failed solve.
-Fixing one whole face is the easy way to be safe.
+If supports are present, they must remove all six rigid-body motions of the body, or the stiffness
+matrix is singular. A body with no supports is instead solved in the quasi-static body-fixed frame
+described above. A model with some but insufficient supports is rejected rather than silently pinned.
+For an ordinary fixed-body static analysis, fixing one whole face is the easy way to be safe.
 
 ### Loads
 
 | Directive | Syntax | Region | Meaning |
 |---|---|---|---|
-| `force` | `force REGION fx, fy, fz` | nodes | **total** point force (N), shared equally among the region's nodes |
+| `force` | `force REGION fx, fy, fz` | nodes or facets | **total** force (N): shared equally among nodes, or distributed uniformly over the facet region |
 | `traction` | `traction REGION tx, ty, tz` | facets | force per area (Pa), global axes; may depend on `x y z` |
 | `pressure` | `pressure REGION p` | facets | pressure (Pa) acting **into** the body; may depend on `x y z` |
 | `body` | `body bx, by, bz` | whole body | force per **volume** (N/m^3); may depend on `x y z` |
@@ -97,12 +100,14 @@ Vector arguments are three comma-separated expressions; commas inside brackets a
 `traction tip 0, where(y > 0, -1, -2), 0`.
 
 * **Gravity** is a body force per volume, not an acceleration: `body 0, -rho*9.81, 0`.
-* **A moment** is applied as a traction field on the facets with zero net force and exactly the
-  requested moment about `about` (default: the centroid of the facets). You can specify the moment vector
+* **A moment** is applied as a traction field on the facets with zero net force and the requested
+  resultant moment. The traction field is centred at the facet-set area centroid; `about x, y, z`
+  specifies the point at which the moment is reported, not a point of force application. A pure
+  couple's resultant moment is independent of reference point. You can specify the moment vector
   directly as `mx, my, mz` or by axis direction and magnitude: `moment tip axis 1, 0, 0 mag 1e5`.
-  A moment along the face normal is **torsion**; one in the face plane is **bending**. It is statically equivalent to a
-  real section stress, not identical to it, so expect local differences near the loaded face
-  (Saint-Venant). Details in [theory.md](theory.md).
+  A moment along the face normal is **torsion**; one in the face plane is **bending**. It is statically
+  equivalent to a real section stress, not identical to it, so expect local differences near the loaded
+  face (Saint-Venant). Details in [theory.md](theory.md).
 * Point forces on a solid mesh create a stress singularity at the node: stresses at that node
   grow without bound as the mesh is refined. Compare away from it, or spread the load with a
   `traction` instead.
@@ -220,9 +225,11 @@ Every error names the line. Common ones:
 | `unknown name 'foo'` | undefined param, or `x y z` used where only constants are allowed |
 | `unsupported syntax` | something outside the whitelist (indexing, attribute access, ...) |
 | `reserved` | a param named like `x`, `pi`, `step`, ... |
-| `needs a node region` | `force` on a facet region; use `region ... nearest` or `nodes` |
+| `force needs a node or facet region` | `force` region is `nearest`, or the region is otherwise not a node/facet region |
 | `needs 3 comma-separated components` | a vector with the wrong number of parts |
 | `positive integer` | element counts must be whole numbers >= 1 |
 | `not finite` | a constant that is `inf` or `nan` (division by zero, `log(-1)`, ...) |
-| `no 'support' line` | nothing stops rigid-body motion |
+| `supports do not remove all six rigid-body modes` | the body has some but insufficient supports; add sufficient constraints or remove all supports to use the free-body frame |
+| `positive material density is required` | an unbalanced free-body load needs mass/inertia; set a positive `rho` |
+| `effective free-body loads are not in rigid-body equilibrium` | inertia and external resultants did not balance; check the mesh, loads, and solver |
 | `load vector contains NaN or inf` | a load expression blew up at some point (`1/x` at `x = 0`, ...) |

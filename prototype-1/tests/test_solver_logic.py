@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import numpy as np
+from scipy import sparse
 
 from mos.core import BC, LoadCase, Material, Model, PointForce, Region
 
@@ -96,6 +97,13 @@ def test_constraints_callable_value_uses_dof_locations():
     assert x0[6] == 1 and x0[7] == 2 and x0[8] == 3                    # node 2: dofs 6,7,8
 
 
+def test_conflicting_overlapping_supports_are_rejected():
+    bc_a = BC(Region("a", "nodes", [0]), (0,), 0.0)
+    bc_b = BC(Region("b", "nodes", [0]), (0,), 0.01)
+    with np.testing.assert_raises_regex(ValueError, "conflicting prescribed displacements"):
+        solver.constraints(_model(bc_a, bc_b), FakeBasis())
+
+
 def test_point_force_is_shared_equally_and_totals_preserved():
     case = LoadCase("p", [PointForce(Region("n", "nodes", [0, 2]), [3.0, 6.0, 9.0])])
     f = solver.assemble_loads(_model(), case, FakeBasis(), None)
@@ -103,23 +111,98 @@ def test_point_force_is_shared_equally_and_totals_preserved():
     assert [f[solver.component_dofs(FakeBasis(), c)].sum() for c in range(3)] == [3.0, 6.0, 9.0]
 
 
-def test_non_finite_load_vector_is_rejected():
-    case = LoadCase("p", [PointForce(Region("n", "nodes", [0]), [np.nan, 0.0, 0.0])])
-    try:
-        solver.assemble_loads(_model(), case, FakeBasis(), None)
-    except ValueError as e:
-        assert "NaN or inf" in str(e)
-        return
-    raise AssertionError("expected ValueError")
+def test_overlapping_point_loads_superpose_and_duplicate_region_ids_are_set_membership():
+    region = Region("n", "nodes", [2, 0, 2])
+    assert region.ids.tolist() == [0, 2]
+    case = LoadCase("overlap", [
+        PointForce(region, [2.0, -4.0, 6.0]),
+        PointForce(Region("one", "nodes", [2]), [3.0, 1.0, -2.0]),
+    ])
+    f = solver.assemble_loads(_model(), case, FakeBasis(), None)
+    dofs = [solver.component_dofs(FakeBasis(), c) for c in range(3)]
+    total = np.array([f[d].sum() for d in dofs])
+    assert np.allclose(total, [5.0, -3.0, 4.0])
+    assert np.allclose(f[[0, 6]], [1.0, 4.0])
+
+
+def test_non_finite_point_force_is_rejected_at_construction():
+    with np.testing.assert_raises_regex(ValueError, "must be finite"):
+        PointForce(Region("n", "nodes", [0]), [np.nan, 0.0, 0.0])
 
 
 def test_equilibrium_error():
     f = solver.equilibrium_error
-    assert f([0, -10, 0], [0, 10, 0], [10.0]) == 0.0                       # balanced
+    assert abs(f([0, -10, 0], [0, 10, 0], [10.0]) - 0.0) < 1e-12       # balanced
     assert np.isclose(f([0, -10, 0], [0, 9, 0], [9.0]), 1 / 10)            # 10 % off
     # displacement-only model: applied = 0, reactions self-equilibrate -> small, not 1e291
     assert f([0, 0, 0], [1e-9, 0, 0], [5e6, -5e6]) < 1e-12
-    assert f([0, 0, 0], [0, 0, 0], [0.0]) == 0.0                           # nothing at all
+    assert abs(f([0, 0, 0], [0, 0, 0], [0.0]) - 0.0) < 1e-12               # nothing at all
+
+
+def test_load_resultants_preserve_force_and_moment_about_origin():
+    b = FakeBasis()
+    points = np.array([[0., 1., 0., 0., 0., .5],
+                       [0., 0., 1., 0., 0., .5],
+                       [0., 0., 0., 1., 0., .5]])
+    b.doflocs = np.zeros((3, b.N))
+    dofs = [solver.component_dofs(b, c) for c in range(3)]
+    for ids in dofs:
+        b.doflocs[:, ids] = points
+    f = np.zeros(b.N)
+    force = np.array([2., -3., 4.])
+    for c in range(3):
+        f[dofs[c][1]] = force[c]
+    origin = np.array([.2, -.1, .4])
+    F, M = solver.load_resultants(f, b, origin)
+    expected_M = np.cross(points[:, 1] - origin, force)
+    assert np.allclose(F, force)
+    assert np.allclose(M, expected_M)
+
+
+def test_body_frame_newton_euler_and_dalembert_resultants():
+    # Symmetric 3-D material points with equal quadrature volumes, centered at the COM.
+    corners = np.array([[x, y, z] for x in (-1., 1.)
+                        for y in (-2., 2.) for z in (-3., 3.)]).T
+    X = corners[:, None, :]
+    dv = np.ones((1, corners.shape[1]))
+    rho = 2.0
+    mass = rho * dv.sum()
+    center = np.zeros(3)
+    r = corners
+    I = np.eye(3) * (rho * np.sum(r * r)) - (r * rho) @ r.T
+    applied_F = np.array([12., -6., 4.])
+    applied_M = np.array([2., 3., -5.])
+    a, alpha = solver.body_frame_acceleration(applied_F, applied_M, mass, I)
+    q_inertial = solver.inertial_body_force(X, rho, center, a, alpha)
+    dF = (q_inertial * dv[None, ...]).sum(axis=(1, 2))
+    dM = (np.cross(np.moveaxis(X - center[:, None, None], 0, -1),
+                   np.moveaxis(q_inertial, 0, -1)) * dv[..., None]).sum(axis=(0, 1))
+    assert np.allclose(a, applied_F / mass)
+    assert np.allclose(I @ alpha, applied_M)
+    assert np.allclose(dF, -applied_F)
+    assert np.allclose(dM, -applied_M)
+
+
+def test_body_frame_acceleration_rejects_nonphysical_inertia_tensors():
+    F, M = np.array([1., 2., 3.]), np.array([1., 0., -1.])
+    with np.testing.assert_raises_regex(ValueError, "symmetric"):
+        solver.body_frame_acceleration(F, M, 2.0, np.array([[1., 1., 0.], [0., 1., 0.], [0., 0., 1.]]))
+    with np.testing.assert_raises_regex(ValueError, "positive definite"):
+        solver.body_frame_acceleration(F, M, 2.0, np.diag([1., 1., -1.]))
+    with np.testing.assert_raises_regex(ValueError, "positive material density"):
+        solver.body_frame_acceleration(F, M, 0.0, np.eye(3))
+
+
+def test_free_body_gauge_does_not_pin_physical_dofs_and_rejects_unbalanced_rhs():
+    # Six zero-energy rigid modes, six unit-stiffness deformation modes.
+    K = sparse.diags([0.] * 6 + [2.] * 6, format="csc")
+    modes = np.eye(12)[:, :6]
+    f = np.r_[np.zeros(6), np.array([2., 4., 6., 8., 10., 12.])]
+    u = solver.solve_free_body_system(K, f, modes)
+    assert np.allclose(u[:6], 0.0)
+    assert np.allclose(u[6:], f[6:] / 2.0)
+    with np.testing.assert_raises_regex(ValueError, "not in rigid-body equilibrium"):
+        solver.solve_free_body_system(K, f + np.r_[1., np.zeros(11)], modes)
 
 
 def test_results_stress_accessors():
@@ -129,3 +212,30 @@ def test_results_stress_accessors():
                        eps_cell=None, sig_cell=S, eps_nodal=None, sig_nodal=S)
     assert np.allclose(r.von_mises(), [100, 40]) and np.allclose(r.von_mises("cell"), [100, 40])
     assert np.allclose(r.principal()[0][0], [100, 40]) and np.allclose(r.von_mises("q")[:, 0], [100, 40])
+
+
+def test_mass_properties_accepts_finite_signed_quadrature_weights():
+    # Quadrature coefficients may be signed even though the integrated volume is positive.
+    # Rejecting any negative coefficient is not a valid general quadrature check.
+    points = np.array([[x, y, z] for x in (-1.0, 1.0)
+                       for y in (-1.0, 1.0) for z in (-1.0, 1.0)]).T
+    weights = np.ones((1, points.shape[1]))
+    weights[0, 0] = -0.1
+    basis = SimpleNamespace(
+        global_coordinates=lambda: points[:, None, :],
+        dx=weights,
+    )
+    volume, center, mass, inertia = solver.mass_properties(basis, 2.0)
+    assert abs(volume - np.sum(weights)) < 1e-12
+    assert np.isfinite(center).all() and np.isfinite(mass)
+    assert np.isfinite(inertia).all()
+    assert mass > 0.0 and np.linalg.eigvalsh(inertia).min() > 0.0
+
+
+def test_mass_properties_reports_non_finite_quadrature_weights_precisely():
+    basis = SimpleNamespace(
+        global_coordinates=lambda: np.zeros((3, 1, 1)),
+        dx=np.array([[np.nan]]),
+    )
+    with np.testing.assert_raises_regex(ValueError, "quadrature weights contain NaN or infinity"):
+        solver.mass_properties(basis, 1.0)

@@ -1,8 +1,10 @@
 # MoS Analyzer: documentation
 
-Linear-elastic, static, 3D finite-element analysis for mechanics of solids. You describe a
+Linear-elastic 3D finite-element analysis for mechanics of solids. You describe a
 body (mesh, material, supports, loads) in a short text format, the solver computes
-displacement, strain and stress, and a browser viewer shows the result.
+displacement, strain and stress, and a browser viewer shows the result. Supported bodies use static
+analysis; support-free bodies use a quasi-static accelerating body-fixed frame at an instant of zero
+angular velocity, not transient dynamics.
 
 ## Where to start
 
@@ -18,7 +20,7 @@ displacement, strain and stress, and a browser viewer shows the result.
 
 ```text
 pip install -r requirements.txt
-pytest                       # unit tests; tests/test_fem.py needs scikit-fem and is skipped without it
+pytest                       # unit tests; real FEM/CAD tests skip if scikit-fem/Gmsh are unavailable
 python -m mos.app            # opens the app; add --spec model.mos to start from a file
 ```
 
@@ -64,9 +66,11 @@ You can skip the text format and build `Model` / `LoadCase` objects directly in 
 
 ## Status and limits
 
-Static, linear-elastic, small-strain, 3D only; one isotropic material per model in the text
+Linear-elastic, small-strain, 3D only; one isotropic material per model in the text
 format (the Python model accepts any symmetric positive-definite 6x6 `C`); tetrahedral or
-hexahedral meshes. There is no plane stress/strain, contact, plasticity, thermal load or dynamics.
+hexahedral meshes. Supported bodies use static analysis. Support-free bodies use a quasi-static,
+body-fixed acceleration correction at an instant of zero spin—not transient dynamics. There is no
+plane stress/strain, contact, plasticity, or thermal load.
 Click-to-pick regions in the viewer are not implemented: regions come from coordinate
 conditions or a nearest-node lookup. See [testing.md](testing.md) for exactly which parts have
 been run against the real libraries.

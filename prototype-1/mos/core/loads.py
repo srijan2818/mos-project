@@ -1,11 +1,12 @@
 """Declarative loads. They are plain data; the solver turns them into force vectors.
 
   PointForce  node region    total force F (N), shared equally among the region's nodes
+  SurfaceForce facet region  total force F (N), distributed uniformly over the face set
   Traction    facet region   force per area (Pa), constant or Field
   Pressure    facet region   p (Pa) acting INTO the body (t = -p n), constant or Field
   BodyForce   whole body     force per volume (N/m^3), constant or Field
-  Moment      facet region   moment M (N m) about `origin` (default: facet-set centroid),
-                             applied as a traction field with zero net force.
+  Moment      facet region   moment M (N m), applied as a pure couple with zero net force;
+                             optional `origin` is a reference point for reporting / visualization.
                              Torsion is just a Moment along the face normal.
 """
 from __future__ import annotations
@@ -29,20 +30,41 @@ def cross0(a, b) -> np.ndarray:
 
 
 def moment_coefficients(X, w, M, origin=None):
-    """Traction t(x) = omega x (x - o) with  A omega = M,  A = sum w (|r|^2 I - r r^T).
+    """Return a pure-couple traction field for the requested resultant moment.
 
     X: (3, N) quadrature points on the face set, w: (N,) area weights.
-    Returns (omega, origin).  Net moment about `origin` is exactly M; net force is zero
-    when origin is the area centroid (the default).
+
+    The traction is ``t(x) = omega x (x - c)``, where ``c`` is the area centroid and
+    ``A omega = M`` for ``A = integral(|r|^2 I - r r^T) dA``.  Centering at the area
+    centroid makes the resultant force zero.  A pure couple's resultant moment is
+    independent of the point about which it is reported, so an explicit ``origin``
+    must not shift the traction field or introduce a spurious net force.
     """
     X = np.asarray(X, float)
     w = np.asarray(w, float)
-    o = (X * w).sum(axis=1) / w.sum() if origin is None else np.asarray(origin, float)
+    if X.ndim != 2 or X.shape[0] != 3 or w.shape != (X.shape[1],):
+        raise ValueError("X must have shape (3, N) and w must have shape (N,)")
+    if X.shape[1] == 0 or not np.isfinite(X).all() or not np.isfinite(w).all():
+        raise ValueError("moment quadrature points and weights must be non-empty and finite")
+    area = float(w.sum())
+    if area <= 0.0 or np.any(w < 0.0):
+        raise ValueError("moment face set must have positive area weights")
+    M = np.asarray(M, float)
+    if M.shape != (3,) or not np.isfinite(M).all():
+        raise ValueError("M must be a finite 3-vector")
+    if origin is not None:
+        origin = np.asarray(origin, float)
+        if origin.shape != (3,) or not np.isfinite(origin).all():
+            raise ValueError("moment origin must be a finite 3-vector")
+    # A couple has no unique point of application: its moment is a free vector.
+    # Always center the distribution at the area centroid, even if the text model
+    # includes `about x, y, z`.  Using that point directly would create a net force.
+    o = (X * w).sum(axis=1) / area
     r = X - o[:, None]
     A = (w * (r * r).sum(axis=0)).sum() * np.eye(3) - (r * w) @ r.T
     if np.linalg.cond(A) > 1e12:
         raise ValueError("face set is degenerate for a moment (zero or line-like area)")
-    return np.linalg.solve(A, np.asarray(M, float)), o
+    return np.linalg.solve(A, M), o
 
 
 @dataclass
@@ -58,6 +80,22 @@ class PointForce:
         self.force = np.asarray(self.force, float)
         if self.force.shape != (3,) or len(self.region) == 0:
             raise ValueError("PointForce needs a 3-vector and a non-empty region")
+        if not np.isfinite(self.force).all():
+            raise ValueError("PointForce must be finite")
+
+
+@dataclass
+class SurfaceForce:
+    """Total force `force` (N), distributed as uniform traction over a facet region."""
+
+    region: Region
+    force: object
+
+    def __post_init__(self):
+        _need_facets(self.region)
+        self.force = np.asarray(self.force, float)
+        if self.force.shape != (3,) or not np.isfinite(self.force).all():
+            raise ValueError("SurfaceForce needs a finite 3-vector")
 
 
 @dataclass
@@ -96,8 +134,12 @@ class BodyForce:
 
 @dataclass
 class Moment:
-    """Moment M (N m) about `origin` (default: facet-set centroid) on a facet region,
-    applied as a zero-net-force traction field. Torsion = a moment along the face normal."""
+    """Pure-couple moment M (N m) on a facet region.
+
+    ``origin`` is an optional reference point for reporting/visualization only: a pure couple's
+    resultant moment is independent of reference point and must have zero resultant force.
+    Torsion is a moment along the face normal.
+    """
 
     region: Region
     M: object                # 3-vector, N m
@@ -106,8 +148,12 @@ class Moment:
     def __post_init__(self):
         _need_facets(self.region)
         self.M = np.asarray(self.M, float)
-        if self.M.shape != (3,):
-            raise ValueError("M must be a 3-vector")
+        if self.M.shape != (3,) or not np.isfinite(self.M).all():
+            raise ValueError("M must be a finite 3-vector")
+        if self.origin is not None:
+            self.origin = np.asarray(self.origin, float)
+            if self.origin.shape != (3,) or not np.isfinite(self.origin).all():
+                raise ValueError("moment origin must be a finite 3-vector")
 
 
 def _need_facets(region):

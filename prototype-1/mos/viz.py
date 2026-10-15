@@ -258,13 +258,14 @@ def build_load_glyphs(case, mesh, model_size: float):
 
     Draws:
       - PointForce  -> red arrow at node-region centroid
+      - SurfaceForce -> red arrow at facet-region centroid
       - Traction    -> bright orange arrow at facet-region centroid
       - Pressure    -> amber inward arrow at facet centroid
       - Moment      -> purple moment arrow
       - BodyForce   -> cyan arrow at model centre
     """
     import pyvista as pv
-    from .core.loads import BodyForce, Moment, PointForce, Pressure, Traction
+    from .core.loads import BodyForce, Moment, PointForce, Pressure, SurfaceForce, Traction
 
     glyphs = []
     arrow_len = max(0.18 * model_size, 1e-4)
@@ -290,6 +291,10 @@ def build_load_glyphs(case, mesh, model_size: float):
                 origin = _region_centroid_direct(load.region, mesh)
                 _add_arrow(origin, load.force, arrow_len, "#ef4444")
 
+            elif isinstance(load, SurfaceForce):
+                origin = _region_centroid_direct(load.region, mesh)
+                _add_arrow(origin, load.force, arrow_len, "#ef4444")
+
             elif isinstance(load, Traction):
                 origin = _region_centroid_direct(load.region, mesh)
                 f = load.field
@@ -304,7 +309,8 @@ def build_load_glyphs(case, mesh, model_size: float):
                 _add_arrow(origin, -origin / (np.linalg.norm(origin) + 1e-12), arrow_len, "#f59e0b")
 
             elif isinstance(load, Moment):
-                origin = _region_centroid_direct(load.region, mesh)
+                origin = (np.asarray(load.origin, float) if load.origin is not None
+                          else _region_centroid_direct(load.region, mesh))
                 mg = create_moment_glyph(origin, load.M, model_size)
                 if mg is not None:
                     glyphs.append((mg, "#a855f7"))

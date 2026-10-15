@@ -5,7 +5,6 @@ preserving CAD boundary surface entities as named boundary facet sets.
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -14,10 +13,15 @@ import numpy as np
 try:
     import gmsh
     HAS_GMSH = True
-except ImportError:
+    GMSH_ERROR = ""
+except (ImportError, OSError) as _exc:   # OSError: gmsh is installed but its shared library won't load
     HAS_GMSH = False
+    GMSH_ERROR = f"{type(_exc).__name__}: {_exc}"
 
-from skfem import MeshTet
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from skfem import MeshTet
 
 
 class CadImportError(RuntimeError):
@@ -60,9 +64,15 @@ def load_step_mesh(
     """
     if not HAS_GMSH:
         raise CadImportError(
-            "Gmsh is required for importing STEP CAD files. "
-            "Please install it with: pip install gmsh"
+            "Gmsh is required for importing STEP CAD files but could not be loaded"
+            + (f" ({GMSH_ERROR})" if GMSH_ERROR else "")
+            + ". Install it with: conda install -c conda-forge python-gmsh"
         )
+
+    try:
+        from skfem import MeshTet
+    except ImportError as exc:
+        raise CadImportError("scikit-fem is required to convert a Gmsh mesh to MeshTet") from exc
 
     path_obj = Path(step_path).resolve()
     if not path_obj.is_file():
@@ -75,9 +85,12 @@ def load_step_mesh(
         gmsh.option.setNumber("General.Terminal", 0)
         gmsh.option.setNumber("General.Verbosity", 1)
         gmsh.clear()
+        # gmsh.clear() removes every model; the OpenCASCADE importer requires a
+        # current model, so create one before importing the STEP geometry.
+        gmsh.model.add(f"cad_import_{path_obj.stem}")
 
         # Import STEP shape via OpenCASCADE kernel
-        shapes = gmsh.model.occ.importShapes(str(path_obj))
+        gmsh.model.occ.importShapes(str(path_obj))
         gmsh.model.occ.synchronize()
 
         surfs = gmsh.model.getEntities(2)
@@ -220,6 +233,13 @@ def load_step_mesh(
 
         return mesh, face_info, stats
 
+    except CadImportError:
+        raise
+    except Exception as exc:
+        raise CadImportError(
+            f"Failed to import or mesh CAD file '{path_obj.name}': "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
     finally:
         try:
             gmsh.clear()

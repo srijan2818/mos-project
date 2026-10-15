@@ -10,7 +10,7 @@ import pytest
 pytest.importorskip("skfem")
 
 from mos.core import (BC, BodyForce, LoadCase, Material, Model, Moment, PointForce,
-                      Traction, facets_where, nearest_node, nodes_where)
+                      SurfaceForce, Traction, facets_where, nearest_node, nodes_where)
 from mos.core.meshes import box_mesh
 from mos.core.solver import solve_case
 
@@ -64,6 +64,59 @@ def test_point_force_equilibrium(beam):
     res = solve_case(model, LoadCase("point", [PointForce(node, [0, -1e5, 0])]))
     assert res.reactions[1] == pytest.approx(1e5, rel=1e-8)
     assert res.equilibrium_error < 1e-8
+
+
+def test_overlapping_surface_forces_superpose_as_total_newtons(beam):
+    model, tip, _ = beam
+    P = 1e5
+    single = solve_case(model, LoadCase("single", [SurfaceForce(tip, [0, -P, 0])]))
+    split = solve_case(model, LoadCase("overlap", [
+        SurfaceForce(tip, [0, -0.4 * P, 0]),
+        SurfaceForce(tip, [0, -0.6 * P, 0]),
+    ]))
+    assert single.applied[1] == pytest.approx(-P, rel=1e-10)
+    assert split.applied[1] == pytest.approx(-P, rel=1e-10)
+    assert split.reactions[1] == pytest.approx(P, rel=1e-8)
+    assert np.allclose(split.u, single.u, rtol=1e-9, atol=1e-12)
+
+
+def test_overlapping_moments_superpose_on_the_same_face(beam):
+    model, tip, _ = beam
+    M = 1e6
+    single = solve_case(model, LoadCase("single moment", [Moment(tip, [0, 0, M])]))
+    split = solve_case(model, LoadCase("overlapping moments", [
+        Moment(tip, [0, 0, 0.35 * M]),
+        Moment(tip, [0, 0, 0.65 * M]),
+    ]))
+    assert np.allclose(split.u, single.u, rtol=1e-9, atol=1e-12)
+    assert np.allclose(split.sig_q, single.sig_q, rtol=1e-9, atol=1e-8)
+    assert split.equilibrium_error < 1e-8
+
+
+def test_free_body_uniform_acceleration_cancels_uniform_body_force():
+    mesh = box_mesh(2.0, 1.0, 1.0, 4, 2, 2)
+    model = Model(mesh, Material.isotropic(E, NU, RHO), [])
+    res = solve_case(model, LoadCase("free fall", [BodyForce([0, -RHO * G, 0])]))
+    assert res.body_fixed_frame
+    assert res.translational_acceleration[1] == pytest.approx(-G, rel=1e-9)
+    assert np.linalg.norm(res.angular_acceleration) < 1e-9
+    assert np.max(np.abs(res.u)) < 1e-10
+    assert np.max(np.abs(res.sig_q)) < 1e-3
+    assert res.equilibrium_error < 1e-8
+
+
+def test_free_body_moment_acceleration_is_removed_by_euler_inertia():
+    mesh = box_mesh(2.0, 1.0, 1.0, 4, 2, 2)
+    tip = facets_where(mesh, lambda x, y, z: np.isclose(x, 2.0), "tip")
+    model = Model(mesh, Material.isotropic(E, NU, RHO), [])
+    M = 2e3
+    res = solve_case(model, LoadCase("free moment", [Moment(tip, [0, 0, M])]))
+    assert res.body_fixed_frame
+    assert res.translational_acceleration == pytest.approx(np.zeros(3), abs=1e-9)
+    assert res.angular_acceleration[2] > 0.0
+    assert res.inertial_moment[2] == pytest.approx(-M, rel=1e-7)
+    assert res.moment_equilibrium_error < 1e-8
+    assert np.max(np.abs(res.sig_q)) > 0.0
 
 
 def test_bending_stress_at_midspan(beam):

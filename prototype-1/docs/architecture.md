@@ -38,9 +38,8 @@ the line they came from.
 * **Regions are named labels, never mesh splits.** Supports and loads refer to regions by name,
   so solver, file format and GUI never share node indices. A region is a node set or a boundary
   facet set. A point load is just a one-node region.
-* **Loads are declarative data.** `PointForce`, `Traction`, `Pressure`, `BodyForce` and `Moment`
-  are plain dataclasses. Only `solver.assemble_loads` knows how to integrate them, and they all
-  reduce to three primitives: a nodal force, a facet integral, a volume integral.
+* **Loads are declarative data.** `PointForce`, `SurfaceForce`, `Traction`, `Pressure`, `BodyForce` and `Moment` are plain dataclasses. `force` means a total resultant in newtons: it is shared across a node region or converted to uniform traction across a facet region. `traction` and `pressure` are force per area. Every load contributes to the same assembled vector, so overlapping regions obey superposition.
+* **Free-body convention is explicit.** With no supports, `solve_case` computes translational and angular acceleration from the external resultants and adds the corresponding D'Alembert force density for a quasi-static solution at an instant of zero spin. Six global rigid modes are removed by a gauge constraint, not artificial supports. This is not transient dynamics; see `theory.md`.
 * **One text format, many front ends.** The GUI edits and runs text; the same text works headless
   (`--spec`) and in tests. A form-based editor can later generate it.
 * **Safe expressions.** Field and condition text is parsed with `ast` and interpreted from a

@@ -30,7 +30,10 @@ Evaluate an expression that must not depend on x, y, z (e.g. '2*L').
 
 ### `compile_predicate(expr: str, **params: float) -> Callable`
 
-Condition on position, e.g. 'abs(x - L) < 1e-9 and y > 0'.  Returns pred(x, y, z) -> bool array.
+Compile a position predicate to a boolean array.
+
+Prefer tolerance bands (e.g. ``abs(x - L) < 1e-6``) over exact floating-point
+coordinate equality (``x == L``), especially for imported CAD meshes.
 
 ### `split_top_level(s: str, sep: str=',') -> list`
 
@@ -129,11 +132,12 @@ Boundary facets whose vertices ALL satisfy pred.
 Declarative loads. They are plain data; the solver turns them into force vectors.
 
 PointForce  node region    total force F (N), shared equally among the region's nodes
+SurfaceForce facet region  total force F (N), distributed uniformly over the face set
 Traction    facet region   force per area (Pa), constant or Field
 Pressure    facet region   p (Pa) acting INTO the body (t = -p n), constant or Field
 BodyForce   whole body     force per volume (N/m^3), constant or Field
-Moment      facet region   moment M (N m) about `origin` (default: facet-set centroid),
-                           applied as a traction field with zero net force.
+Moment      facet region   moment M (N m), applied as a pure couple with zero net force;
+                           optional `origin` is a reference point for reporting / visualization.
                            Torsion is just a Moment along the face normal.
 ```
 
@@ -143,15 +147,25 @@ Cross product along axis 0. a: (3,) or (3, ...); b: (3, ...).
 
 ### `moment_coefficients(X, w, M, origin=None)`
 
-Traction t(x) = omega x (x - o) with  A omega = M,  A = sum w (|r|^2 I - r r^T).
+Return a pure-couple traction field for the requested resultant moment.
 
 X: (3, N) quadrature points on the face set, w: (N,) area weights.
-Returns (omega, origin).  Net moment about `origin` is exactly M; net force is zero
-when origin is the area centroid (the default).
+
+The traction is ``t(x) = omega x (x - c)``, where ``c`` is the area centroid and
+``A omega = M`` for ``A = integral(|r|^2 I - r r^T) dA``.  Centering at the area
+centroid makes the resultant force zero.  A pure couple's resultant moment is
+independent of the point about which it is reported, so an explicit ``origin``
+must not shift the traction field or introduce a spurious net force.
 
 ### class `PointForce`  _(@dataclass)_
 
 Total force `force` (N) on a node region, shared equally among its nodes.
+
+Fields: `region: Region`, `force: object`
+
+### class `SurfaceForce`  _(@dataclass)_
+
+Total force `force` (N), distributed as uniform traction over a facet region.
 
 Fields: `region: Region`, `force: object`
 
@@ -175,8 +189,11 @@ Fields: `field: object`
 
 ### class `Moment`  _(@dataclass)_
 
-Moment M (N m) about `origin` (default: facet-set centroid) on a facet region,
-applied as a zero-net-force traction field. Torsion = a moment along the face normal.
+Pure-couple moment M (N m) on a facet region.
+
+``origin`` is an optional reference point for reporting/visualization only: a pure couple's
+resultant moment is independent of reference point and must have zero resultant force.
+Torsion is a moment along the face normal.
 
 Fields: `region: Region`, `M: object`, `origin: Optional[object] = None`
 
@@ -193,7 +210,7 @@ Fields: `region: Region`, `components: tuple = (0, 1, 2)`, `value: object = 0.0`
 
 ### class `LoadCase`  _(@dataclass)_
 
-A named list of loads (PointForce, Traction, Pressure, BodyForce, Moment).
+A named list of loads (PointForce, SurfaceForce, Traction, Pressure, BodyForce, Moment).
 
 Fields: `name: str = 'case'`, `loads: List[object] = field(default_factory=list)`
 
@@ -221,7 +238,7 @@ One directive per line, '#' starts a comment. Units are whatever you use consist
   region   NAME nearest x, y, z                 the single node closest to a point
 
   support  REGION [xyz] [= value]               fix displacement components (default xyz = 0)
-  force    REGION fx, fy, fz                    total point force, shared among region nodes
+  force    REGION fx, fy, fz                    total force (nodes: shared nodal force; facets: uniform resultant)
   traction REGION tx, ty, tz                    force per area; components may depend on x, y, z
   pressure REGION p                             pushes into the body; may depend on x, y, z
   body     bx, by, bz                           force per volume; may depend on x, y, z
@@ -261,14 +278,15 @@ Resolve regions on the mesh and create the Model and LoadCase.
 
 ## `mos.core.solver`
 
-Static linear-elastic 3D solver on scikit-fem.
+Linear-elastic 3D solver on scikit-fem.
 
-Written for scikit-fem >= 8. NOT yet run against the real library (it could not be installed
-where this was written): the DOF bookkeeping is unit-tested with a fake basis, but the assembly
-calls are first exercised by tests/test_fem.py. See docs/testing.md.
+Supported bodies use static elasticity. Support-free bodies use a quasi-static accelerating
+body-fixed frame at an instant of zero spin, with Newton-Euler acceleration and D'Alembert
+inertia loads. The real scikit-fem path still requires integration validation in an environment
+where the dependency is installed; see docs/testing.md.
 
-Pipeline: stiffness K -> load vector f -> constraints -> solve -> strain/stress/reactions.
-Everything scikit-fem-specific lives in this file.
+Pipeline: stiffness K -> loads -> physical constraints or free-body gauge -> solve ->
+strain/stress/resultants. Everything scikit-fem-specific lives in this file.
 
 ### `make_basis(mesh, order: int=2)`
 
@@ -278,17 +296,61 @@ Vector P2 (default) on tets, or Q2 on hexes.  P1/Q1 are too stiff for bending.
 
 All DOF indices belonging to displacement component c (0, 1, 2).
 
+### `rigid_body_modes(basis, center=None) -> np.ndarray`
+
+Return six independent rigid translations/rotations sampled at vector DOFs.
+
+Rotational modes are scaled by the mesh extent before an orthonormal basis is
+formed.  These modes are used to verify support sufficiency and, for a free body,
+to choose a numerical body-fixed gauge without pinning physical displacement DOFs.
+
+### `load_resultants(f, basis, origin=None)`
+
+Return the force and moment resultants represented by an assembled FE vector.
+
+The moment is evaluated about ``origin`` (global origin by default).  Summing each
+component's scalar shape-function loads at its DOF coordinates exactly preserves
+resultants for the P1/P2 and Q1/Q2 Lagrange bases used by this solver.
+
+### `mass_properties(basis, density: float)`
+
+Return volume, volume centroid, mass and inertia tensor for uniform density.
+
+### `body_frame_acceleration(force, moment, mass, inertia)`
+
+Newton-Euler translational/angular acceleration at an instant of zero spin.
+
+### `inertial_body_force(X, density, center, acceleration, angular_acceleration)`
+
+D'Alembert force density for an instantaneously non-rotating body-fixed frame.
+
+The omitted centrifugal/Coriolis terms are zero under the explicit zero-spin,
+quasi-static assumption.  Euler acceleration is represented by the distributed
+force ``-rho * (a + alpha x r)``, whose force/moment resultants cancel the applied
+Newton-Euler resultants.
+
+### `solve_free_body_system(K, f, modes, equilibrium_scale=None)`
+
+Solve ``K u = f`` with rigid modes gauged, without fixing physical DOFs.
+
 ### `assemble_stiffness(basis, C4)`
 
 Global stiffness matrix K (sparse) for elasticity tensor C4 on `basis`.
 
 ### `assemble_loads(model: Model, case: LoadCase, basis, elem) -> np.ndarray`
 
-Global load vector f for all loads of `case` (point, surface and volume integrals).
+Global load vector for point, resultant-force, surface and volume loads.
+
+``force`` on nodes is shared equally over those nodes; ``force`` on facets is a
+total resultant distributed as uniform traction over the selected surface.
+Explicit ``traction`` remains force per area.
 
 ### `constraints(model: Model, basis)`
 
-Returns (D, x0, per_component_sets): constrained DOFs, prescribed values.
+Return constrained DOFs, prescribed values, and per-component DOF sets.
+
+Overlapping supports may prescribe the same value, but contradictory values on the same
+DOF are physically incompatible and are rejected instead of depending on directive order.
 
 ### class `Results`  _(@dataclass)_
 
@@ -300,16 +362,21 @@ Attributes (nel = cells, nqp = quadrature points per cell, nn = mesh vertices):
 basis              the scikit-fem Basis used (P2/Q2 vector element by default)
 u                  all DOF values, shape (ndofs,)
 u_nodal            displacement at mesh vertices, (3, nn)
-reactions          total support reaction force per component, (3,)
-applied            total applied force per component, (3,)
-equilibrium_error  relative force-equilibrium error (see `equilibrium_error`); ~1e-10 or smaller
+applied            resultant of user-applied external forces, (3,)
+reactions          resultant of physical support reactions; gauge constraints are not reactions
+applied_moment     external moment about the body's volume centroid, (3,)
+reaction_moment    support-reaction moment about the same centroid, (3,)
+inertial_force     resultant of D'Alembert force density, (3,)
+inertial_moment    moment of the D'Alembert force density, (3,)
+translational_acceleration, angular_acceleration  Newton-Euler acceleration used for free bodies
+equilibrium_error  maximum of relative resultant force and moment residuals
 eps_q, sig_q       strain / stress tensors at quadrature points, (3, 3, nel, nqp)
 eps_cell, sig_cell quadrature-weighted cell averages, (3, 3, nel)
 eps_nodal, sig_nodal  volume-weighted averages of the cell values at vertices, (3, 3, nn);
                    smooth, for plotting (peaks are underestimated, see docs/theory.md)
 ```
 
-Fields: `basis: object`, `u: np.ndarray`, `u_nodal: np.ndarray`, `reactions: np.ndarray`, `applied: np.ndarray`, `equilibrium_error: float`, `eps_q: np.ndarray`, `sig_q: np.ndarray`, `eps_cell: np.ndarray`, `sig_cell: np.ndarray`, `eps_nodal: np.ndarray`, `sig_nodal: np.ndarray`
+Fields: `basis: object`, `u: np.ndarray`, `u_nodal: np.ndarray`, `reactions: np.ndarray`, `applied: np.ndarray`, `equilibrium_error: float`, `eps_q: np.ndarray`, `sig_q: np.ndarray`, `eps_cell: np.ndarray`, `sig_cell: np.ndarray`, `eps_nodal: np.ndarray`, `sig_nodal: np.ndarray`, `applied_moment: np.ndarray = field(default_factory=lambda: np.zeros(3))`, `reaction_moment: np.ndarray = field(default_factory=lambda: np.zeros(3))`, `inertial_force: np.ndarray = field(default_factory=lambda: np.zeros(3))`, `inertial_moment: np.ndarray = field(default_factory=lambda: np.zeros(3))`, `translational_acceleration: np.ndarray = field(default_factory=lambda: np.zeros(3))`, `angular_acceleration: np.ndarray = field(default_factory=lambda: np.zeros(3))`, `moment_equilibrium_error: float = 0.0`, `body_fixed_frame: bool = False`
 
 #### `Results.von_mises(where='nodal')`
 
@@ -328,7 +395,15 @@ driven only by prescribed displacements (applied = 0) is still judged sensibly.
 
 ### `solve_case(model: Model, case: LoadCase, order: int=2) -> Results`
 
-Solve one load case: assemble, constrain, solve, then recover strain, stress, reactions.
+Solve a load case and recover small-strain stress and strain.
+
+Supported bodies use ordinary static elasticity and physical support reactions.
+A body with no prescribed-displacement supports is treated as a free body in a
+body-fixed frame at an instant of zero spin: Newton-Euler acceleration is computed
+from the external resultant force/moment, the matching D'Alembert body-force density
+is assembled, and six global gauge constraints remove only rigid translation/rotation.
+This is a quasi-static acceleration-corrected solve, not transient dynamics.  A model
+with some but insufficient supports is rejected instead of being silently pinned.
 
 order=2 (default) uses P2 tets / Q2 hexes; order=1 is available but far too stiff in bending.
 
@@ -418,6 +493,7 @@ Return list of (pyvista_mesh, color_hex) for all loads in a LoadCase.
 
 Draws:
   - PointForce  -> red arrow at node-region centroid
+  - SurfaceForce -> red arrow at facet-region centroid
   - Traction    -> bright orange arrow at facet-region centroid
   - Pressure    -> amber inward arrow at facet centroid
   - Moment      -> purple moment arrow

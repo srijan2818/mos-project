@@ -30,7 +30,19 @@ class Region:
     def __post_init__(self):
         if self.kind not in ("nodes", "facets"):
             raise ValueError("kind must be 'nodes' or 'facets'")
-        self.ids = np.asarray(self.ids, dtype=int)
+        raw = np.asarray(self.ids)
+        if raw.ndim != 1:
+            raise ValueError("region ids must be a one-dimensional index array")
+        if raw.size and not np.issubdtype(raw.dtype, np.integer):
+            if not np.issubdtype(raw.dtype, np.number) or not np.isfinite(raw).all() \
+                    or not np.equal(raw, np.floor(raw)).all():
+                raise ValueError("region ids must be finite integer indices")
+        ids = raw.astype(int, copy=False)
+        if np.any(ids < 0):
+            raise ValueError("region ids must be non-negative")
+        # A region is a set of indices. Deduplicate here so repeated IDs cannot cause
+        # advanced-indexing updates to lose force contributions or double-integrate facets.
+        self.ids = np.unique(ids)
 
     def __len__(self):
         return len(self.ids)

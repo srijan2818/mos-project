@@ -13,7 +13,7 @@ One directive per line, '#' starts a comment. Units are whatever you use consist
   region   NAME nearest x, y, z                 the single node closest to a point
 
   support  REGION [xyz] [= value]               fix displacement components (default xyz = 0)
-  force    REGION fx, fy, fz                    total point force, shared among region nodes
+  force    REGION fx, fy, fz                    total force (nodes: shared nodal force; facets: uniform resultant)
   traction REGION tx, ty, tz                    force per area; components may depend on x, y, z
   pressure REGION p                             pushes into the body; may depend on x, y, z
   body     bx, by, bz                           force per volume; may depend on x, y, z
@@ -28,7 +28,7 @@ import numpy as np
 
 from .fields import (Field, RESERVED, compile_predicate, eval_constant,
                      split_top_level)
-from .loads import BodyForce, Moment, PointForce, Pressure, Traction
+from .loads import BodyForce, Moment, PointForce, Pressure, SurfaceForce, Traction
 from .material import Material
 from .model import BC, LoadCase, Model
 from .regions import Region, facets_where, nearest_node, nodes_where
@@ -90,6 +90,58 @@ def _h_param(spec, rest, n):
     spec.params[name] = eval_constant(m.group(2), **spec.params)
 
 
+def _split_step_path_and_size(arg: str, params: dict) -> tuple[str, float | None]:
+    """Split a STEP path from its optional mesh size, allowing spaces in paths.
+
+    Quoted paths may use single or double quotes. Backslashes are preserved except
+    when escaping the active quote or another backslash, so Windows paths work too.
+    For unquoted paths, the STEP suffix identifies the end of the path.
+    """
+    arg = arg.strip()
+    if not arg:
+        raise SpecError("mesh step PATH [mesh_size]")
+
+    if arg[0] in ("'", '"'):
+        quote = arg[0]
+        chars = []
+        i = 1
+        while i < len(arg):
+            char = arg[i]
+            if char == "\\" and i + 1 < len(arg) and arg[i + 1] in (quote, "\\"):
+                chars.append(arg[i + 1])
+                i += 2
+                continue
+            if char == quote:
+                path = "".join(chars)
+                tail = arg[i + 1:].strip()
+                if not path:
+                    raise SpecError("STEP path cannot be empty")
+                mesh_size = float(eval_constant(tail, **params)) if tail else None
+                return path, mesh_size
+            chars.append(char)
+            i += 1
+        raise SpecError("unterminated quoted STEP path")
+
+    # A STEP suffix followed by whitespace marks the end of an unquoted path.
+    match = re.match(r"^(.*?\.(?:step|stp))(?=\s|$)(?:\s+(.*))?$", arg, flags=re.I)
+    if match:
+        path = match.group(1).strip()
+        tail = (match.group(2) or "").strip()
+        mesh_size = float(eval_constant(tail, **params)) if tail else None
+        return path, mesh_size
+
+    # Backward-compatible fallback for extensionless paths, including optional sizes.
+    pieces = arg.rsplit(None, 1)
+    if len(pieces) == 2:
+        try:
+            mesh_size = float(eval_constant(pieces[1], **params))
+        except (ValueError, SyntaxError, ZeroDivisionError):
+            pass
+        else:
+            return pieces[0], mesh_size
+    return arg, None
+
+
 def _h_mesh(spec, rest, n):
     kind, _, arg = rest.partition(" ")
     kind, arg = kind.lower(), arg.strip()
@@ -98,11 +150,7 @@ def _h_mesh(spec, rest, n):
             raise SpecError("mesh file PATH")
         spec.mesh = ("file", arg)
     elif kind == "step":
-        if not arg:
-            raise SpecError("mesh step PATH [mesh_size]")
-        toks = arg.split(None, 1)
-        step_path = toks[0]
-        ms = float(eval_constant(toks[1], **spec.params)) if len(toks) > 1 else None
+        step_path, ms = _split_step_path_and_size(arg, spec.params)
         spec.mesh = ("step", step_path, ms)
     elif kind == "box":
         toks = arg.split()
@@ -232,8 +280,6 @@ def parse_spec(text: str) -> Spec:
         raise SpecError("no 'mesh' line")
     if spec.material is None:
         raise SpecError("no 'material' line")
-    if not spec.supports:
-        raise SpecError("no 'support' line: the body would be free to move")
     return spec
 
 
@@ -294,7 +340,13 @@ def build(spec: Spec, mesh=None):
                 if kind == "body":
                     loads.append(BodyForce(payload))
                 elif kind == "force":
-                    loads.append(PointForce(get(n, r), payload))
+                    reg = get(n, r)
+                    if reg.kind == "nodes":
+                        loads.append(PointForce(reg, payload))
+                    elif reg.kind == "facets":
+                        loads.append(SurfaceForce(reg, payload))
+                    else:
+                        raise SpecError(f"line {n}: force needs a node or facet region")
                 elif kind == "traction":
                     loads.append(Traction(get(n, r), payload))
                 elif kind == "pressure":

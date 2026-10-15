@@ -52,28 +52,31 @@ the default for that reason.
 * Stiffness matrix: `K_ij = integral sigma(phi_j) : eps(phi_i) dV`.
 * `body`: `f_i = integral b . phi_i dV`, evaluating the field at the quadrature points.
 * `traction`: `f_i = integral_facets t . phi_i dS`. `pressure` is the same with `t = -p n`.
-* `force`: the total force, divided equally among the region's nodes, is added to those nodes'
-  DOFs.
+* `force` on a node region: the total force is shared equally among the selected vertex nodes.
+  `force` on a facet region: the total force is converted to uniform traction `F / area` and
+  integrated over the full facet set. These represent the same resultant but different load
+  distributions; the latter avoids dependence on how many mesh nodes happen to lie on the face.
+  `SurfaceForce` stores that total-force surface load in the Python API.
 
 Solution vector `u` holds all DOFs; `Results.u_nodal` is its restriction to the mesh vertices.
 (Mid-edge DOFs of P2 are not shown in the viewer.)
 
 ## 4. Moments and torque
 
-A solid mesh has no rotational DOFs, so a moment `M` about a point `o` is applied as a traction
-on a set of faces:
+A solid mesh has no rotational DOFs, so a moment `M` is represented as a traction on a set of faces.
+The traction is centred at the area centroid `c` of the selected face set:
 
 ```text
-t(x) = omega x (x - o),    r = x - o
+t(x) = omega x (x - c),    r = x - c
 A omega = M,               A = integral ( |r|^2 I - r r^T ) dA
 ```
 
-`A` is the area-inertia tensor of the face set about `o`, and `omega` is `A^-1 M`. Then
-`integral r x t dA = A omega = M`, so the **net moment about `o` is exactly `M`** (to quadrature
-accuracy; the same quadrature that applies the load is used to build `A`). With `o` at the area
-centroid (the default), the **net force is exactly zero**, because it equals `omega x integral r dA`.
-With another origin there is a net force: the load is then "a moment `M` about `o`", not a pure
-couple.
+`A` is the area-inertia tensor of the face set about `c`, and `omega` is `A^-1 M`. Then
+`integral r x t dA = A omega = M`, so the **net moment is `M`** (to quadrature accuracy; the same
+quadrature that applies the load is used to build `A`). The **net force is zero** because
+`integral t dA = omega x integral r dA = 0`. The optional `about x, y, z` point only specifies a
+reference point for reporting the moment. Since a pure couple has zero resultant force, its moment
+is independent of reference point; specifying `about` must not introduce a fictitious net force.
 
 Two special cases, for a planar face with outward normal `+x` and principal axes `y`, `z`:
 
@@ -100,19 +103,39 @@ Constrained DOFs `D` are eliminated: with `I` the free DOFs,
 r = K u - f        (zero on free DOFs; the support reaction on D)
 ```
 
-The solver reports, per component, the total applied force `sum f` and total reaction `sum r`, and
+The solver reports the total applied force and support reaction, plus their moments about the body's
+volume centroid. `equilibrium_error` is the maximum of normalized force and moment residuals.
+Each component's basis functions sum to 1, so `sum f` preserves the force resultant, and a rigid
+translation lies in the null space of `K`. Moment balance is evaluated from the forces at their DOF
+coordinates. With sufficient constraints, the residual should be near numerical round-off; a large
+violation signals a load-assembly, support, or conditioning issue rather than discretisation error.
+
+
+## 6. Free bodies in an accelerating body-fixed frame
+
+A model with **no supports** is interpreted as a free elastic body. For a quasi-static stress solve
+at an instant when the body has zero angular velocity, the rigid-body acceleration is computed from
+the applied force and moment resultants about the center of mass `C`:
 
 ```text
-equilibrium_error = |applied + reactions| / max(|applied|, |r_D|)
+m a_C = F_external
+I_C alpha = M_external,C
+b_inertial(x) = -rho [a_C + alpha x (x - C)]
 ```
 
-Why this check is meaningful: each component's basis functions sum to 1, so `sum f` equals the
-total applied force exactly, and a rigid translation lies in the null space of `K`, so
-`sum (K u) = 0`. A properly assembled and solved model therefore satisfies the check to round-off
-(typically ~1e-10 or smaller; the tests allow 1e-8). A violation means a bug or an ill-conditioned model, not discretisation error.
-Moment equilibrium is not checked.
+The last term is the D'Alembert inertial force per volume. Its integrated force and moment cancel
+the external resultants, leaving a self-equilibrated load for the elastic solve. Six global rigid modes
+are then removed with a numerical gauge constraint; this does not pin physical DOFs and its Lagrange
+multipliers are not reported as support reactions. The density `rho` must be positive whenever a
+nonzero external resultant requires an acceleration.
 
-## 6. Strain and stress recovery
+This is deliberately **not transient dynamics**. It ignores elastic vibration/inertia, and assumes
+zero angular velocity at the instant being analysed; centrifugal and Coriolis terms are therefore
+zero at that instant. It does not model the evolution of spin, acceleration, or deformation over time.
+A partially constrained body is still a static-support problem and must have enough supports to
+remove all six rigid modes; insufficient supports are rejected rather than silently pinned.
+
+## 7. Strain and stress recovery
 
 * At every quadrature point: `eps = sym(grad u)`, `sigma = C : eps` (`Results.eps_q`, `sig_q`,
   shape `(3, 3, cells, points)`). These are the raw results.
@@ -124,7 +147,7 @@ The nodal field is smooth and cheap but it is an average, so it **smears and und
 peaks** at stress concentrations and does not honour traction-free surfaces exactly. For a peak
 value, refine the mesh and watch it converge, or read `sig_q`.
 
-## 7. Derived quantities
+## 8. Derived quantities
 
 For a stress tensor `S` with principal values `s1 >= s2 >= s3` (eigenvalues of the symmetric `S`):
 
@@ -136,7 +159,7 @@ Tresca     = s1 - s3
 Uniaxial stress `s` gives von Mises `= |s|`; pure shear `tau` gives von Mises `= sqrt(3) tau` and
 principal values `(tau, 0, -tau)`. The same eigen-decomposition gives principal strains.
 
-## 8. Reference solutions used by the benchmarks
+## 9. Reference solutions used by the benchmarks
 
 Cantilever, length `L`, square section `H x W`, `I = W H^3 / 12`, `G = E / (2 (1 + nu))`, fixed at x = 0:
 

@@ -1,5 +1,9 @@
 """Tests verifying robustness of moment and load applications."""
 import numpy as np
+import pytest
+
+pytest.importorskip("skfem")
+
 from mos.core.spec import parse_spec, build
 from mos.core.solver import solve_case
 

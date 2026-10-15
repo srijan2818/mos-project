@@ -3,6 +3,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+pytest.importorskip("skfem")
+
 from mos.core.cad import HAS_GMSH
 from mos.core.spec import parse_spec, build
 from mos.core.solver import solve_case

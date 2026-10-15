@@ -19,7 +19,7 @@ class BC:
 
 @dataclass
 class LoadCase:
-    """A named list of loads (PointForce, Traction, Pressure, BodyForce, Moment)."""
+    """A named list of loads (PointForce, SurfaceForce, Traction, Pressure, BodyForce, Moment)."""
 
     name: str = "case"
     loads: List[object] = field(default_factory=list)

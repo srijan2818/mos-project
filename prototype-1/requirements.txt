@@ -8,4 +8,4 @@ pyvista
 trame
 trame-vtk
 trame-vuetify
-# later: gmsh
+gmsh

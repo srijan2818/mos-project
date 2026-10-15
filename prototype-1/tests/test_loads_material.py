@@ -1,7 +1,8 @@
 """Load / material / region / field construction and validation."""
 import numpy as np
 
-from mos.core import BodyForce, Field, Material, Moment, PointForce, Pressure, Region, Traction
+from mos.core import (BodyForce, Field, Material, Moment, PointForce, Pressure, Region,
+                      SurfaceForce, Traction)
 from mos.core.fields import as_field
 
 F = Region("f", "facets", [0, 1])
@@ -25,14 +26,23 @@ def test_loads_accept_raw_constants():
     b = BodyForce([0, 0, -9.81])
     assert np.allclose(b.field(X)[2], -9.81)
     assert np.array_equal(PointForce(N, [1, 2, 3]).force, [1, 2, 3])
+    assert np.array_equal(SurfaceForce(F, [3, 2, 1]).force, [3, 2, 1])
     assert np.array_equal(Moment(F, [0, 0, 1]).M, [0, 0, 1]) and Moment(F, [0, 0, 1]).origin is None
     assert Field.constant(2.0)(X).shape == (2,)
+
+
+def test_region_ids_are_a_unique_nonnegative_index_set():
+    assert Region("n", "nodes", [3, 1, 3]).ids.tolist() == [1, 3]
+    for ids in ([-1], [[0, 1]], [0.5], [np.nan]):
+        _raises(Region, "bad", "nodes", ids)
 
 
 def test_load_validation():
     _raises(PointForce, F, [1, 2, 3])                    # needs node region
     _raises(PointForce, N, [1, 2])                       # needs 3-vector
     _raises(PointForce, Region("e", "nodes", []), [1, 2, 3])
+    _raises(SurfaceForce, N, [0, 0, 0])
+    _raises(SurfaceForce, F, [1, np.inf, 0])
     _raises(Traction, N, [0, 0, 0])                      # needs facets
     _raises(Traction, Region("e", "facets", []), [0, 0, 0])
     _raises(Pressure, N, 1.0)
@@ -55,6 +65,9 @@ def test_material_validation_and_anisotropic_c():
     _raises(Material, C)
     _raises(Material.isotropic, 1.0, 0.5)                # nu out of range
     _raises(Material.isotropic, 1.0, -1.0)
+    _raises(Material.isotropic, 1.0, 0.3, -1.0)
     C = np.diag([1.0, 2, 3, 4, 5, 6])                    # general orthotropic-style C is accepted
     m = Material(C, rho=7.0)
-    assert m.rho == 7.0 and m.C4[0, 1, 0, 1] == 6.0 and m.C4[1, 2, 2, 1] == 4.0
+    assert abs(m.rho - 7.0) < 1e-12
+    assert abs(m.C4[0, 1, 0, 1] - 6.0) < 1e-12
+    assert abs(m.C4[1, 2, 2, 1] - 4.0) < 1e-12

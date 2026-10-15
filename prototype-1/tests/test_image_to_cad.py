@@ -1,10 +1,17 @@
 """Tests for image to CAD STEP pipeline."""
 from pathlib import Path
 import numpy as np
+import pytest
 from PIL import Image, ImageDraw
 
-from mos.core.cad import load_step_mesh
+from mos.core.cad import HAS_GMSH, load_step_mesh
 from mos.core.image_to_cad import image_to_polygons, image_to_step
+
+try:
+    import skfem  # noqa: F401
+    HAS_SKFEM = True
+except ImportError:
+    HAS_SKFEM = False
 
 
 def test_image_to_polygons(tmp_path: Path):
@@ -22,6 +29,7 @@ def test_image_to_polygons(tmp_path: Path):
     assert len(poly) >= 4  # A simplified rectangle has around 4-5 vertices
 
 
+@pytest.mark.skipif(not (HAS_GMSH and HAS_SKFEM), reason="gmsh and scikit-fem are required")
 def test_image_to_step_and_mesh(tmp_path: Path):
     """Verify end-to-end conversion of an image sketch to a meshed 3D STEP solid."""
     img_path = tmp_path / "bracket.png"

@@ -13,8 +13,10 @@ from PIL import Image
 try:
     import gmsh
     HAS_GMSH = True
-except ImportError:
+    GMSH_ERROR = ""
+except (ImportError, OSError) as _exc:   # OSError: gmsh is installed but its shared library won't load
     HAS_GMSH = False
+    GMSH_ERROR = f"{type(_exc).__name__}: {_exc}"
 
 
 def _trace_moore_neighbor(binary: np.ndarray) -> np.ndarray:
@@ -134,7 +136,8 @@ def image_to_step(
 ) -> Path:
     """Convert a 2D drawing image profile into an extruded 3D solid STEP CAD model."""
     if not HAS_GMSH:
-        raise RuntimeError("Gmsh is required for STEP export.")
+        raise RuntimeError("Gmsh is required for STEP export but could not be loaded"
+                           + (f" ({GMSH_ERROR})" if GMSH_ERROR else "") + ".")
 
     polygons, (img_w, img_h) = image_to_polygons(
         image_path,

@@ -34,6 +34,10 @@ class Material:
         C = np.asarray(self.C, dtype=float)
         if C.shape != (6, 6):
             raise ValueError("C must be 6x6")
+        if not np.isfinite(C).all():
+            raise ValueError("C must contain only finite values")
+        if not np.isfinite(self.rho) or self.rho < 0.0:
+            raise ValueError("rho must be finite and non-negative")
         if not np.allclose(C, C.T, rtol=1e-9, atol=1e-9 * np.abs(C).max()):
             raise ValueError("C must be symmetric")
         if np.linalg.eigvalsh(C).min() <= 0:
@@ -48,6 +52,8 @@ class Material:
     @classmethod
     def isotropic(cls, E: float, nu: float, rho: float = 0.0) -> "Material":
         """Isotropic material from Young's modulus E, Poisson ratio nu and density rho."""
+        if not np.isfinite(E) or E <= 0.0:
+            raise ValueError("E must be finite and positive")
         if not -1.0 < nu < 0.5:
             raise ValueError("nu must be in (-1, 0.5)")
         lam = E * nu / ((1 + nu) * (1 - 2 * nu))

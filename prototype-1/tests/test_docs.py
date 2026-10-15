@@ -53,5 +53,5 @@ def test_every_directive_function_and_template_is_documented():
 
 def test_documented_dependencies_match_requirements():
     reqs = (ROOT / "requirements.txt").read_text()
-    for pkg in ("scikit-fem", "meshio", "pyvista", "trame", "trame-vtk", "trame-vuetify"):
+    for pkg in ("scikit-fem", "meshio", "gmsh", "pyvista", "trame", "trame-vtk", "trame-vuetify"):
         assert pkg in reqs, pkg

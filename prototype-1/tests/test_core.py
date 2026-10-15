@@ -90,6 +90,20 @@ def test_moment_traction_is_statically_equivalent():
         assert np.allclose(moment, M, atol=1e-10), moment
 
 
+def test_moment_with_explicit_origin_remains_a_zero_force_couple():
+    X, w = _plate()
+    M = np.array([2.0, -3.0, 5.0])
+    reported_origin = np.array([12.0, -7.0, 9.0])
+    omega, centroid = moment_coefficients(X, w, M, reported_origin)
+    traction = cross0(omega, X - centroid[:, None])
+    resultant_force = (traction * w).sum(axis=1)
+    # The resultant moment of a pure couple is independent of the reference point.
+    r = X - reported_origin[:, None]
+    resultant_moment = (cross0_each(r, traction) * w).sum(axis=1)
+    assert np.allclose(resultant_force, 0.0, atol=1e-12)
+    assert np.allclose(resultant_moment, M, atol=1e-10)
+
+
 def cross0_each(a, b):
     return np.stack([a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]])
 
@@ -160,7 +174,7 @@ def test_where_and_conditions():
     assert np.array_equal(f("where(x > -2 and x < 1, 1, 0)"), [1, 1, 0])
     assert np.array_equal(f("where(x < -0.5 or x > 1, 1, 0)"), [1, 0, 1])
     assert np.array_equal(f("where(not x > 0, 1, 0)"), [1, 1, 0])
-    assert np.array_equal(f("where(x == 0, 7, 0)"), [0, 7, 0])
+    assert np.array_equal(f("where(abs(x) < 1e-12, 7, 0)"), [0, 7, 0])
     g = Field.from_expr(["0", "where(x < L/2, -p, 0)", "0"], p=3.0, L=2.0)(_X)
     assert np.array_equal(g[1], [-3, -3, 0])
     assert np.array_equal(f("(x > 0) * 4"), [0, 0, 4])                  # bool in arithmetic
@@ -188,7 +202,7 @@ def test_predicates():
 
 
 def test_eval_constant_and_split():
-    assert eval_constant("2*L^2", L=3.0) == 18.0
+    assert abs(eval_constant("2*L^2", L=3.0) - 18.0) < 1e-12
     for bad in ("x", "1 < 2", "foo", "1/0", "log(-1)", "sqrt(-4)"):
         try:
             eval_constant(bad)

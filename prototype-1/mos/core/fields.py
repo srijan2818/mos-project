@@ -108,7 +108,11 @@ def eval_constant(expr: str, **params: float) -> float:
 
 
 def compile_predicate(expr: str, **params: float) -> Callable:
-    """Condition on position, e.g. 'abs(x - L) < 1e-9 and y > 0'.  Returns pred(x, y, z) -> bool array."""
+    """Compile a position predicate to a boolean array.
+
+    Prefer tolerance bands (e.g. ``abs(x - L) < 1e-6``) over exact floating-point
+    coordinate equality (``x == L``), especially for imported CAD meshes.
+    """
     fn = _compile_expr(expr, params)
 
     def pred(x, y, z):
