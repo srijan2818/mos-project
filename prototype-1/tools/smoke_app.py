@@ -96,7 +96,32 @@ def main():
                           reactions=np.array([0, 1e6, 0.]), equilibrium_error=1e-12,
                           sig_nodal=0.5 * (sig + sig.transpose(1, 0, 2)),
                           eps_nodal=0.5 * (eps + eps.transpose(1, 0, 2)))
-    app.build = lambda spec: spec_mod.build(spec, fakemesh.box(*spec.mesh[1:7]))
+    def fake_cad_mesh():
+        """A box-like tetra mesh with named CAD surfaces for STEP-path smoke tests."""
+        mesh = fakemesh.box(10.0, 1.0, 1.0, 2, 1, 1)
+        boundary_ids = np.asarray(mesh.boundary_facets(), dtype=int)
+        boundary_vertices = mesh.facets[:, boundary_ids]
+        boundaries = {}
+        for axis, axis_letter in enumerate("xyz"):
+            lo, hi = float(mesh.p[axis].min()), float(mesh.p[axis].max())
+            coords = mesh.p[axis, boundary_vertices]
+            boundaries[f"cad_face_{2 * axis + 1}"] = boundary_ids[
+                np.all(np.isclose(coords, lo, rtol=0.0, atol=1e-9), axis=0)]
+            boundaries[f"cad_face_{2 * axis + 2}"] = boundary_ids[
+                np.all(np.isclose(coords, hi, rtol=0.0, atol=1e-9), axis=0)]
+        mesh.boundaries = boundaries
+        return mesh
+
+    def fake_build(spec, mesh=None):
+        """Build with stand-in meshes so the smoke test stays offline."""
+        if mesh is None:
+            if spec.mesh[0] == "step":
+                mesh = fake_cad_mesh()
+            else:
+                mesh = fakemesh.box(*spec.mesh[1:7])
+        return spec_mod.build(spec, mesh=mesh)
+
+    app.build = fake_build
     solved_cases = []
 
     def fake_solve(model, case):
@@ -177,6 +202,26 @@ def main():
     script_case = solved_cases[-1]
     assert len(script_case.loads) == 3  # original template load plus both additions
     assert len({load.region.name for load in script_case.loads}) == len(script_case.loads)
+
+    # Interactive first-load of STEP: generic -x/+x choices must be mapped to
+    # the imported mesh's named boundary faces, not stale default x=0 bounds.
+    state.config_mode = "interactive"
+    state.geom_mode = "step"
+    state.cad_preset = "custom"
+    state.cad_custom_path = "/tmp/model with spaces.step"
+    state.cad_mesh_size = 0.6
+    state.supports_list = [{"face": "-x", "comps": "xyz"}]
+    state.loads_list = [{"mode": "force", "target": "face", "face": "+x",
+                         "vec": "0, -100, 0", "val": "0", "pt": [10, 0, 0]}]
+    state.selected_face, state.support_face = "+x", "-x"
+    state.show_face_highlight = False  # the smoke-test PyVista stub has no PolyData
+    ctrl.run_solve()
+    assert state.status_type in ("success", "warning"), state.status
+    assert "region   neg_x facets" not in state.spec_text, state.spec_text
+    assert "support  cad_face_1 xyz" in state.spec_text, state.spec_text
+    assert "force    cad_face_2 0, -100, 0" in state.spec_text, state.spec_text
+    assert len(solved_cases[-1].loads) == 1
+    assert solved_cases[-1].loads[0].region.name == "cad_face_2"
     print("app smoke test OK")
 
 

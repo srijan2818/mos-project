@@ -128,6 +128,31 @@ def load_resultants(f, basis, origin=None):
     return force, moment
 
 
+def _check_and_clean_inertia_symmetry(inertia, *, source: str) -> np.ndarray:
+    """Reject meaningful skew before removing only floating-point round-off.
+
+    The symmetry check must happen on the *raw* tensor, before averaging with its
+    transpose. Otherwise a broken integration path could be hidden by symmetrization.
+    """
+    inertia = np.asarray(inertia, dtype=float)
+    if inertia.shape != (3, 3) or not np.isfinite(inertia).all():
+        raise ValueError(f"{source} produced a non-finite or non-3x3 inertia tensor")
+    scale = float(np.linalg.norm(inertia, ord=np.inf))
+    skew = float(np.linalg.norm(inertia - inertia.T, ord=np.inf))
+    rel_skew = skew / scale if scale > 0.0 else (0.0 if skew == 0.0 else np.inf)
+    # Floating point reductions can differ by a few ulps. A relative 1e-12
+    # threshold is deliberately much larger than typical round-off (~1e-15),
+    # but small enough to flag a tensor-construction or data-alignment bug.
+    if rel_skew > 1e-12:
+        raise ValueError(
+            f"{source} produced a materially asymmetric inertia tensor "
+            f"(relative skew {rel_skew:.3g}, threshold 1e-12); "
+            "the tensor is not being silently symmetrized. Check quadrature "
+            "coordinate/weight alignment and mass-property calculation."
+        )
+    return 0.5 * (inertia + inertia.T)
+
+
 def mass_properties(basis, density: float):
     """Return volume, volume centroid, mass and inertia tensor for uniform density."""
     X = np.asarray(_v(basis.global_coordinates()), float)
@@ -135,27 +160,38 @@ def mass_properties(basis, density: float):
     if X.shape[0] != 3 or X.shape[1:] != dx.shape:
         raise ValueError("basis coordinates and quadrature weights have incompatible shapes")
     # Quadrature weights are signed coefficients, not physical pointwise volumes.
-    # Some valid quadrature rules use negative weights; rejecting every negative dx
-    # incorrectly prevents an otherwise valid mesh from being solved.  What matters
-    # here is that coordinates and weights are finite and that the *integrated* volume
-    # below is positive.  For free-body dynamics, mass/inertia are checked again for
-    # physical validity before accelerations are computed.
+    # Their shape/order must match the global-coordinate quadrature axis exactly.
     if not np.isfinite(X).all():
         raise ValueError("mesh quadrature coordinates contain NaN or infinity")
     if not np.isfinite(dx).all():
         raise ValueError("mesh quadrature weights contain NaN or infinity")
-    volume = float(dx.sum())
-    if not np.isfinite(volume) or volume <= 0.0:
-        raise ValueError("mesh must have positive finite volume")
-    center = (X * dx[None, ...]).sum(axis=(1, 2)) / volume
     density = float(density)
     if not np.isfinite(density) or density < 0.0:
         raise ValueError("density must be finite and non-negative")
+    volume = float(dx.sum())
+    if not np.isfinite(volume) or volume <= 0.0:
+        raise ValueError("mesh must have positive finite volume")
+
+    # Shift coordinates before averaging. This avoids summing large global CAD
+    # coordinates (e.g. a small part located far from the origin), which loses
+    # precision through cancellation. The first quadrature point is just a stable
+    # local reference; physical results must not depend on this choice.
+    reference = X.reshape(3, -1)[:, 0]
+    Xlocal = X - reference[:, None, None]
+    center_local = (Xlocal * dx[None, ...]).sum(axis=(1, 2)) / volume
+    center = reference + center_local
     mass = density * volume
-    r = X - center[:, None, None]
+    r = Xlocal - center_local[:, None, None]
     rflat = r.reshape(3, -1)
     dm = (density * dx).ravel()
-    inertia = np.eye(3) * np.dot(dm, np.sum(rflat * rflat, axis=0)) - (rflat * dm) @ rflat.T
+
+    # I = integral((r·r) eye - r rᵀ) dm. Compute the raw tensor first,
+    # inspect its skew, and only remove it when it is consistent with round-off.
+    # The raw skew should normally be near machine precision; a larger value is
+    # evidence of a code/data problem, not something symmetrization can repair.
+    second_moment = (rflat * dm) @ rflat.T
+    inertia_raw = np.eye(3) * np.dot(dm, np.sum(rflat * rflat, axis=0)) - second_moment
+    inertia = _check_and_clean_inertia_symmetry(inertia_raw, source="mass-property integration")
     return volume, center, mass, inertia
 
 
@@ -168,11 +204,7 @@ def body_frame_acceleration(force, moment, mass, inertia):
         raise ValueError("force and moment resultants must be finite")
     if not np.isfinite(mass) or mass <= 0.0:
         raise ValueError("a positive material density is required for an unbalanced free body")
-    inertia = np.asarray(inertia, float)
-    if inertia.shape != (3, 3) or not np.isfinite(inertia).all():
-        raise ValueError("inertia tensor must be a finite 3x3 matrix")
-    if not np.allclose(inertia, inertia.T, rtol=1e-10, atol=1e-12):
-        raise ValueError("inertia tensor must be symmetric")
+    inertia = _check_and_clean_inertia_symmetry(inertia, source="Newton-Euler input")
     eigenvalues = np.linalg.eigvalsh(inertia)
     if eigenvalues[0] <= 0.0:
         raise ValueError("inertia tensor must be positive definite")

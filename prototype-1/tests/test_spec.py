@@ -60,6 +60,35 @@ def test_all_templates_parse_and_build():
         assert case.loads and model.bcs, name
 
 
+def test_legacy_side_regions_resolve_to_cad_boundaries_with_offset_coordinates():
+    # Models imported from STEP need not be rooted at x=0. Old interactive
+    # specs can still contain neg_x/pos_x predicates based on the old box bounds.
+    mesh = fakemesh.box(10.0, 1.0, 1.0, 2, 1, 1)
+    mesh.p[0] += 100.0
+    boundary_ids = np.asarray(mesh.boundary_facets(), dtype=int)
+    boundary_vertices = mesh.facets[:, boundary_ids]
+    mesh.boundaries = {}
+    for axis, axis_letter in enumerate("xyz"):
+        lo, hi = float(mesh.p[axis].min()), float(mesh.p[axis].max())
+        coords = mesh.p[axis, boundary_vertices]
+        mesh.boundaries[f"cad_face_{2 * axis + 1}"] = boundary_ids[
+            np.all(np.isclose(coords, lo, rtol=0.0, atol=1e-9), axis=0)]
+        mesh.boundaries[f"cad_face_{2 * axis + 2}"] = boundary_ids[
+            np.all(np.isclose(coords, hi, rtol=0.0, atol=1e-9), axis=0)]
+
+    text = """\
+mesh step "/tmp/model.step" 0.6
+material E = 1e9, nu = 0.25, rho = 1000
+region neg_x facets x < 1e-6
+region pos_x facets x > 10 - 1e-6
+support neg_x xyz
+force pos_x 0, -100, 0
+"""
+    model, case = build(parse_spec(text), mesh=mesh)
+    assert np.array_equal(model.bcs[0].region.ids, mesh.boundaries["cad_face_1"])
+    assert np.array_equal(case.loads[0].region.ids, mesh.boundaries["cad_face_2"])
+
+
 def test_region_sizes_and_load_types():
     spec = parse_spec(TEMPLATES["Cantilever - tip load"])
     model, case = build(spec, _mesh(spec))

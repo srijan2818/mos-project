@@ -71,6 +71,12 @@ A condition is a comparison on `x y z`, e.g. `x < 1e-9`, `abs(x - L) < 1e-6 and 
 on coordinates; use a tolerance. A region that matches nothing is an error that names the line.
 Region names are unique.
 
+For imported STEP meshes, the facet-region names `neg_x`, `pos_x`, `neg_y`, `pos_y`, `neg_z`, and
+`pos_z` are also recognized as compatibility aliases for the named CAD boundary furthest toward that
+global axis side. Older interactive-builder scripts may contain coordinate conditions based on a
+previous model's bounds; for these six canonical aliases, the imported CAD boundary is used instead.
+For a specific CAD face, prefer selecting its `cad_face_N` boundary directly.
+
 ### `support`
 
 ```text

@@ -31,7 +31,8 @@ from .fields import (Field, RESERVED, compile_predicate, eval_constant,
 from .loads import BodyForce, Moment, PointForce, Pressure, SurfaceForce, Traction
 from .material import Material
 from .model import BC, LoadCase, Model
-from .regions import Region, facets_where, nearest_node, nodes_where
+from .regions import (Region, cad_boundary_name_for_side, facets_where,
+                      nearest_node, nodes_where)
 
 
 class SpecError(ValueError):
@@ -319,6 +320,15 @@ def build(spec: Spec, mesh=None):
                 reg = facets_where(mesh, arg, name)
         except ValueError as e:
             raise SpecError(f"line {n}: {e}") from None
+        if kind == "facets" and hasattr(mesh, "boundaries"):
+            # Canonical UI face aliases (neg_x, pos_x, ...) on a STEP mesh refer
+            # to named CAD surfaces, not coordinate ranges. Older generated specs
+            # may carry stale predicates from default/previous-model bounds; always
+            # resolve those aliases to the actual named face to prevent both empty
+            # regions and accidental selection of the entire boundary.
+            cad_name = cad_boundary_name_for_side(mesh, name)
+            if cad_name is not None:
+                reg = Region(name, "facets", mesh.boundaries[cad_name])
         if len(reg) == 0:
             raise SpecError(f"line {n}: region '{name}' is empty - no {kind} satisfy its condition "
                             "(tip: use abs(x - L) < 1e-6 rather than x == L)")

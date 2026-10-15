@@ -122,6 +122,15 @@ Node region: all nodes where pred(x, y, z) is true.
 
 Node region holding the single node closest to `point`.
 
+### `cad_boundary_name_for_side(mesh, side: str) -> str | None`
+
+Return the named CAD boundary furthest toward an axis-aligned side.
+
+This is a compatibility mapping for UI aliases such as ``neg_x``/``-x``.
+It uses each named boundary's facet centroid, so it works when a STEP
+model's coordinates are offset from the origin. Returns ``None`` when the
+mesh has no usable named boundaries or ``side`` is not a recognized alias.
+
 ### `facets_where(mesh, pred: Callable, name: str) -> Region`
 
 Boundary facets whose vertices ALL satisfy pred.

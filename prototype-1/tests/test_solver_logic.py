@@ -183,9 +183,18 @@ def test_body_frame_newton_euler_and_dalembert_resultants():
     assert np.allclose(dM, -applied_M)
 
 
+def test_body_frame_acceleration_tolerates_roundoff_scale_inertia_asymmetry():
+    F, M = np.array([1., 2., 3.]), np.array([1., 0., -1.])
+    # The skew here is far below the tensor's scale and should be projected away.
+    I = np.array([[5., 0.5 + 1e-13, 0.], [0.5, 4., 0.], [0., 0., 3.]])
+    I_symmetric = 0.5 * (I + I.T)
+    _, alpha = solver.body_frame_acceleration(F, M, 2.0, I)
+    assert np.allclose(I_symmetric @ alpha, M, rtol=1e-12, atol=1e-12)
+
+
 def test_body_frame_acceleration_rejects_nonphysical_inertia_tensors():
     F, M = np.array([1., 2., 3.]), np.array([1., 0., -1.])
-    with np.testing.assert_raises_regex(ValueError, "symmetric"):
+    with np.testing.assert_raises_regex(ValueError, "materially asymmetric"):
         solver.body_frame_acceleration(F, M, 2.0, np.array([[1., 1., 0.], [0., 1., 0.], [0., 0., 1.]]))
     with np.testing.assert_raises_regex(ValueError, "positive definite"):
         solver.body_frame_acceleration(F, M, 2.0, np.diag([1., 1., -1.]))
@@ -229,7 +238,37 @@ def test_mass_properties_accepts_finite_signed_quadrature_weights():
     assert abs(volume - np.sum(weights)) < 1e-12
     assert np.isfinite(center).all() and np.isfinite(mass)
     assert np.isfinite(inertia).all()
+    assert np.array_equal(inertia, inertia.T)  # explicitly symmetrized by construction
     assert mass > 0.0 and np.linalg.eigvalsh(inertia).min() > 0.0
+
+
+def test_mass_properties_is_translation_invariant_for_far_from_origin_mesh():
+    points = np.array([[x, y, z] for x in (-1.0, 1.0)
+                       for y in (-2.0, 2.0) for z in (-3.0, 3.0)]).T
+    weights = np.ones((1, points.shape[1]))
+    origin = np.array([1e9, -2e9, 3e9])
+    def make_basis(coords):
+        return SimpleNamespace(
+            global_coordinates=lambda: coords[:, None, :],
+            dx=weights,
+        )
+    _, c0, _, I0 = solver.mass_properties(make_basis(points), 2.0)
+    _, c1, _, I1 = solver.mass_properties(make_basis(points + origin[:, None]), 2.0)
+    assert np.allclose(c1 - origin, c0, rtol=0.0, atol=2e-7)
+    assert np.allclose(I1, I0, rtol=1e-7, atol=1e-7)
+
+
+def test_inertia_symmetry_guard_rejects_material_skew_before_cleaning():
+    raw = np.array([[5.0, 0.5, 0.0], [0.5001, 4.0, 0.0], [0.0, 0.0, 3.0]])
+    with np.testing.assert_raises_regex(ValueError, "materially asymmetric.*not being silently symmetrized"):
+        solver._check_and_clean_inertia_symmetry(raw, source="test integration")
+
+
+def test_inertia_symmetry_guard_only_cleans_roundoff_scale_skew():
+    raw = np.array([[5.0, 0.5 + 1e-14, 0.0], [0.5, 4.0, 0.0], [0.0, 0.0, 3.0]])
+    clean = solver._check_and_clean_inertia_symmetry(raw, source="test integration")
+    assert np.array_equal(clean, clean.T)
+    assert np.allclose(clean, 0.5 * (raw + raw.T), rtol=0.0, atol=0.0)
 
 
 def test_mass_properties_reports_non_finite_quadrature_weights_precisely():

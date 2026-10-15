@@ -67,3 +67,19 @@ especially on imported CAD meshes.
 - Backend errors are surfaced as `CadImportError` with the STEP filename attached.
 - `mesh step` syntax now supports quoted paths and paths with spaces; the interactive builder quotes paths and resolves built-in preset files relative to the project directory.
 - Added offline regression tests for the Gmsh model lifecycle and STEP paths with spaces. Real Gmsh/OpenCASCADE meshing still requires the optional runtime dependencies.
+
+## CAD face-region regression (2026-10-14)
+
+- Fixed the first-load path for STEP files in the interactive builder. Previously, it could generate a selector such as `region neg_x facets x < 1e-6` using the default or previous model's bounds before the new STEP mesh existed; the selector then matched no facets on the imported model.
+- The app now builds the selected STEP mesh first, gets its actual bounds and named CAD face sets, resolves generic `-x`/`+x`/etc. face choices against those named faces, then builds the full model using the already imported mesh.
+- Generic side mapping now chooses the available CAD boundary whose facet centroid is furthest toward that side, instead of arbitrarily choosing the first face. The named boundary set is used directly, avoiding fragile coordinate predicates for CAD faces.
+- Extended the mocked app smoke test to reproduce the first-load case with default `-x` support and `+x` load on a STEP path containing spaces. It asserts that no `neg_x` coordinate region is generated and that the support/load resolve to the named CAD boundaries.
+- The mocked regression passes, but true STEP-import/mesh behavior still needs confirmation in an environment with Gmsh/OpenCASCADE and scikit-fem installed.
+
+## Inertia-tensor numerical root-cause audit (2026-10-15)
+
+- The prior version symmetrized the tensor inside `mass_properties()` before checking the raw skew. That could hide a tensor-construction or quadrature coordinate/weight alignment bug. This is corrected: raw asymmetry is measured **before** cleanup. Relative skew above `1e-12` now raises a diagnostic at the integration point; only skew at round-off scale is averaged with the transpose.
+- The previous `body_frame_acceleration()` check was not enough to audit the production path, because `solve_case()` receives the tensor from `mass_properties()`, which had already symmetrized it. The production path now checks at the source as well as the Newton-Euler boundary.
+- Coordinates are shifted to a local reference before computing the centroid and inertia. This reduces cancellation for CAD parts located far from the global origin and makes inertia translation-invariant up to the precision available in the input coordinates.
+- Added regressions for translation invariance, rejection of significant raw skew, round-off-only cleanup, and non-finite quadrature values.
+- Offline result: `pytest -q` reports 72 passed, 9 skipped. Numerical helper tests pass, but the real `scikit-fem`/Gmsh integration remains unverified here because these dependencies are unavailable in this runtime.

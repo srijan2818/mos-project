@@ -25,6 +25,7 @@ from mos import viz
 from mos.core.cad import is_step_file, load_step_mesh  # noqa: F401 (may be used by templates)
 from mos.core.image_to_cad import image_to_step
 from mos.core.solver import solve_case
+from mos.core.regions import cad_boundary_name_for_side
 from mos.core.spec import build, parse_spec
 from mos.templates import TEMPLATES
 
@@ -98,17 +99,26 @@ def _unique_region_name(text: str, stem: str) -> str:
 
 
 def _resolved_face_name(face_name: str, mesh_ref=None) -> str:
-    """Use the actual CAD boundary name when available; otherwise keep the user-facing box face."""
-    if face_name and face_name.startswith("cad_face_"):
+    """Resolve a generic axis face to the corresponding named CAD boundary.
+
+    The UI can still hold generic values such as ``-x`` when a STEP model is
+    first selected. Once its mesh is available, choose the CAD boundary whose
+    surface centroid is furthest toward that side instead of generating a
+    coordinate predicate against stale/default bounds.
+    """
+    boundaries = getattr(mesh_ref, "boundaries", None) if mesh_ref is not None else None
+    if not boundaries:
         return face_name
-    if mesh_ref is not None and hasattr(mesh_ref, "boundaries") and mesh_ref.boundaries:
-        if face_name in mesh_ref.boundaries:
-            return face_name
-        if face_name in _FACE_NAME_SAFE:
-            for key in mesh_ref.boundaries:
-                if key.startswith("cad_face_"):
-                    return key
-        return next(iter(mesh_ref.boundaries))
+    if face_name in boundaries:
+        return face_name
+    if face_name in _FACE_NAME_SAFE:
+        name = cad_boundary_name_for_side(mesh_ref, face_name)
+        return name if name is not None else face_name
+    # Preserve an explicit CAD face if it exists. If it became stale because a
+    # different STEP model was selected, fall back deterministically rather than
+    # silently inventing a coordinate-defined region.
+    if face_name and face_name.startswith("cad_face_"):
+        return next(iter(boundaries))
     return face_name
 
 
@@ -365,8 +375,12 @@ def main(argv=None):
                 state.point_x, state.point_y, state.point_z = float(c[0]), float(c[1]), float(c[2])
 
     # ------------------------------------------------------------------ spec rebuild
-    def _rebuild_spec_from_interactive():
-        """Construct a valid .mos script from the interactive UI state."""
+    def _rebuild_spec_from_interactive(mesh_ref_override=None):
+        """Construct a valid .mos script from the interactive UI state.
+
+        ``mesh_ref_override`` is used while solving a newly selected STEP file:
+        it is the just-imported mesh, not the mesh from the previous model.
+        """
         lines = ["# MoS Model — Interactive Builder"]
 
         # 1. Mesh
@@ -393,7 +407,7 @@ def main(argv=None):
 
         # 3. Supports
         bounds = tuple(state.model_bounds)
-        mesh_ref = S.model.mesh if S.model else None
+        mesh_ref = mesh_ref_override if mesh_ref_override is not None else (S.model.mesh if S.model else None)
         if state.supports_list:
             lines.append("# Boundary Supports")
             for i, sup in enumerate(state.supports_list):
@@ -506,11 +520,35 @@ def main(argv=None):
             state.status_type = "info"
             state.flush()
 
+            mesh_override = None
             if state.config_mode == "interactive":
                 _rebuild_spec_from_interactive()
+                if state.geom_mode == "step":
+                    # On the first STEP import (or after changing files), S.model
+                    # is absent or still points to the previous geometry. Building
+                    # face selectors against its bounds creates conditions such as
+                    # ``x < 1e-6`` that can never match the newly imported CAD mesh.
+                    # Build just the mesh/material part first, then generate the
+                    # interactive supports and loads against its named CAD faces.
+                    geometry_directives = {"param", "mesh", "material"}
+                    geometry_lines = []
+                    for line in state.spec_text.splitlines():
+                        stripped = line.strip()
+                        if (not stripped or stripped.startswith("#") or
+                                stripped.split(None, 1)[0].lower() in geometry_directives):
+                            geometry_lines.append(line)
+                    geometry_spec = parse_spec("\n".join(geometry_lines) + "\n")
+                    geometry_model, _ = build(geometry_spec)
+                    mesh_override = geometry_model.mesh
+                    points = np.asarray(mesh_override.p, dtype=float)
+                    lo, hi = points.min(axis=1), points.max(axis=1)
+                    bounds = (lo[0], hi[0], lo[1], hi[1], lo[2], hi[2])
+                    state.model_bounds = list(bounds)
+                    _sync_face_options(mesh_override, bounds)
+                    _rebuild_spec_from_interactive(mesh_ref_override=mesh_override)
 
             spec = parse_spec(state.spec_text)
-            model, case = build(spec)
+            model, case = build(spec, mesh=mesh_override) if mesh_override is not None else build(spec)
             res = solve_case(model, case)
             S.res, S.grid = res, viz.to_pyvista(model.mesh)
             S.spec, S.model, S.case = spec, model, case

@@ -60,6 +60,47 @@ def nearest_node(mesh, point, name: str) -> Region:
     return Region(name, "nodes", [int(np.argmin(d))])
 
 
+
+
+_CAD_SIDE_ALIASES = {
+    "neg_x": (0, False), "pos_x": (0, True),
+    "neg_y": (1, False), "pos_y": (1, True),
+    "neg_z": (2, False), "pos_z": (2, True),
+    "-x": (0, False), "+x": (0, True),
+    "-y": (1, False), "+y": (1, True),
+    "-z": (2, False), "+z": (2, True),
+}
+
+
+def cad_boundary_name_for_side(mesh, side: str) -> str | None:
+    """Return the named CAD boundary furthest toward an axis-aligned side.
+
+    This is a compatibility mapping for UI aliases such as ``neg_x``/``-x``.
+    It uses each named boundary's facet centroid, so it works when a STEP
+    model's coordinates are offset from the origin. Returns ``None`` when the
+    mesh has no usable named boundaries or ``side`` is not a recognized alias.
+    """
+    choice = _CAD_SIDE_ALIASES.get(str(side).lower())
+    boundaries = getattr(mesh, "boundaries", None)
+    if choice is None or not boundaries:
+        return None
+    axis, want_max = choice
+    points = np.asarray(mesh.p, dtype=float)
+    facets = np.asarray(mesh.facets, dtype=int)
+    candidates = []
+    for name, raw_ids in boundaries.items():
+        ids = np.asarray(raw_ids, dtype=int)
+        if ids.ndim != 1 or ids.size == 0 or np.any(ids < 0) or np.any(ids >= facets.shape[1]):
+            continue
+        vertices = facets[:, ids]
+        centroid = points[:, vertices].mean(axis=(1, 2))
+        if np.isfinite(centroid[axis]):
+            candidates.append((float(centroid[axis]), name))
+    if not candidates:
+        return None
+    return (max if want_max else min)(candidates, key=lambda item: item[0])[1]
+
+
 def facets_where(mesh, pred: Callable, name: str) -> Region:
     """Boundary facets whose vertices ALL satisfy pred."""
     node_ok = np.asarray(pred(*mesh.p), dtype=bool)
