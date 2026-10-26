@@ -222,6 +222,23 @@ def main():
     assert "force    cad_face_2 0, -100, 0" in state.spec_text, state.spec_text
     assert len(solved_cases[-1].loads) == 1
     assert solved_cases[-1].loads[0].region.name == "cad_face_2"
+
+    # CV Mode check: analyze sample real-life object and generate CAD spec
+    state.geom_mode = "cv"
+    state.cv_source_mode = "preset"
+    state.cv_preset_path = "cad_models/cv_samples/bracket_photo.png"
+    state.cv_ref_scale = 0.25
+    ctrl.run_cv_analysis()
+    assert state.cv_detected_type == "bracket", state.cv_detected_type
+    assert state.cv_confidence_pct >= 70, state.cv_confidence_pct
+    assert state.cv_param_leg_x > 0
+    assert state.cv_annotated_preview.startswith("data:image/png;base64,")
+
+    # Generate CAD & load into interactive model
+    ctrl.generate_cv_cad_and_load()
+    assert state.status_type in ("success", "warning"), state.status
+    assert "mesh     step" in state.spec_text, state.spec_text
+    assert "cv_detected_object.step" in state.spec_text, state.spec_text
     print("app smoke test OK")
 
 

@@ -9,3 +9,6 @@ trame
 trame-vtk
 trame-vuetify
 gmsh
+# cv
+transformers>=4.45
+torch>=2.0

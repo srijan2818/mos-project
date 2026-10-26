@@ -50,6 +50,13 @@ scene with PyVista (VTK) and streams it to a browser tab.
 Colours show the smoothed nodal values (see [theory.md](theory.md), section 6): good for the
 overall picture, not for the exact peak.
 
+## Real-Life CV Mode (Computer Vision to CAD)
+
+The interactive builder includes a dedicated **Real-Life CV Mode** under Geometry Source:
+1. **Camera or Image Capture**: Take a real-life picture with your device camera / webcam using the snapshot button, upload an image file from disk, or select from built-in real-life presets (Structural L-Bracket, Tensile Plate with Hole, Rectangular Beam, Structural I-Beam, Stepped Motor Shaft, or Hollow Pipe).
+2. **Lightweight CV Classification & Feature Extraction**: The lightweight vision model segments the object from the desk/background, extracts invariant morphological metrics (aspect ratio, convex hull solidity, Euler hole topology, re-entrant notch angles, and bilateral symmetry), and identifies the mechanical part with a confidence score.
+3. **Parametric CAD Solid Generation**: Extracted pixel dimensions are calibrated to physical metric units (meters) and displayed in editable parameter fields. Clicking **Generate 3D CAD Solid & Solve FEA** synthesizes a watertight 3D STEP solid using OpenCASCADE and Gmsh, automatically meshes it, identifies boundary faces for supports and loads, and renders the solved linear-elastic stresses in the 3D viewport.
+
 ## How it is built
 
 `mos/app/main.py` keeps all UI state in trame's `state` (`theme`, `spec_text`, `field`, `stress_unit`,

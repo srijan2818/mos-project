@@ -23,6 +23,8 @@ from trame.widgets import vuetify3 as v3
 
 from mos import viz
 from mos.core.cad import is_step_file, load_step_mesh  # noqa: F401 (may be used by templates)
+from mos.core.cad_parametric import generate_cad_from_parameters
+from mos.core.cv_detector import analyze_image_object, cv_image_to_cad_step
 from mos.core.image_to_cad import image_to_step
 from mos.core.solver import solve_case
 from mos.core.regions import cad_boundary_name_for_side
@@ -384,8 +386,10 @@ def main(argv=None):
         lines = ["# MoS Model — Interactive Builder"]
 
         # 1. Mesh
-        if state.geom_mode == "step":
-            if state.cad_preset == "custom":
+        if state.geom_mode in ("step", "cv"):
+            if state.geom_mode == "cv":
+                step_file = str(Path(state.cv_step_path).resolve())
+            elif state.cad_preset == "custom":
                 step_file = str(state.cad_custom_path).strip()
             else:
                 # Resolve bundled examples relative to the project, not the launch CWD.
@@ -523,7 +527,7 @@ def main(argv=None):
             mesh_override = None
             if state.config_mode == "interactive":
                 _rebuild_spec_from_interactive()
-                if state.geom_mode == "step":
+                if state.geom_mode in ("step", "cv"):
                     # On the first STEP import (or after changing files), S.model
                     # is absent or still points to the previous geometry. Building
                     # face selectors against its bounds creates conditions such as
@@ -686,12 +690,145 @@ def main(argv=None):
             traceback.print_exc()
             state.image_status = f"Conversion error: {e}"
 
+    def run_cv_analysis():
+        """Analyze a real-life photo with the lightweight CV model to determine object & parameters."""
+        try:
+            img_source = None
+            if state.cv_image_b64 and state.cv_source_mode == "webcam":
+                img_source = state.cv_image_b64
+            elif state.cv_source_mode == "upload" and str(state.cv_custom_path).strip():
+                img_source = str(state.cv_custom_path).strip()
+            else:
+                preset = state.cv_preset_path or "cad_models/cv_samples/bracket_photo.png"
+                project_root = Path(__file__).resolve().parents[2]
+                img_source = str((project_root / preset).resolve())
+
+            state.cv_status = "Analyzing real-life object photo..."
+            ref_scale = float(state.cv_ref_scale or 0.30)
+            res = analyze_image_object(img_source, reference_scale=ref_scale)
+
+            state.cv_detected_type = res.object_type
+            state.cv_friendly_name = res.friendly_name
+            state.cv_confidence_pct = int(res.confidence * 100)
+            state.cv_features_text = "\n".join(f"• {f}" for f in res.detected_features)
+            state.cv_annotated_preview = res.annotated_image_b64
+
+            # Map parameters to reactive state
+            p = res.parameters
+            if res.object_type == "bracket":
+                state.cv_param_leg_x = p.get("leg_x", 0.20)
+                state.cv_param_leg_y = p.get("leg_y", 0.20)
+                state.cv_param_width = p.get("width", 0.06)
+                state.cv_param_thickness = p.get("thickness", 0.015)
+                state.cv_param_hole_radius = p.get("hole_radius", 0.008)
+            elif res.object_type == "plate_hole":
+                state.cv_param_length = p.get("length", 0.40)
+                state.cv_param_width = p.get("width", 0.20)
+                state.cv_param_thickness = p.get("thickness", 0.02)
+                state.cv_param_hole_diameter = p.get("hole_diameter", 0.06)
+            elif res.object_type == "beam":
+                state.cv_param_length = p.get("length", 1.0)
+                state.cv_param_height = p.get("height", 0.15)
+                state.cv_param_width = p.get("width", 0.10)
+            elif res.object_type == "ibeam":
+                state.cv_param_length = p.get("length", 1.0)
+                state.cv_param_height = p.get("height", 0.20)
+                state.cv_param_flange_width = p.get("flange_width", 0.12)
+                state.cv_param_flange_thickness = p.get("flange_thickness", 0.02)
+                state.cv_param_web_thickness = p.get("web_thickness", 0.015)
+            elif res.object_type == "shaft":
+                state.cv_param_length = p.get("length", 0.60)
+                state.cv_param_diameter_main = p.get("diameter_main", 0.08)
+                state.cv_param_diameter_step = p.get("diameter_step", 0.05)
+                state.cv_param_step_length = p.get("step_length", 0.20)
+            elif res.object_type == "pipe":
+                state.cv_param_length = p.get("length", 0.80)
+                state.cv_param_outer_diameter = p.get("outer_diameter", 0.10)
+                state.cv_param_inner_diameter = p.get("inner_diameter", 0.07)
+
+            state.cv_status = f"Detected {res.friendly_name} ({int(res.confidence * 100)}% confidence). Review parameters below."
+        except Exception as e:
+            traceback.print_exc()
+            state.cv_status = f"CV analysis failed: {e}"
+
+    def generate_cv_cad_and_load():
+        """Build parametric 3D STEP solid from detected object and load into CAD engine."""
+        try:
+            obj_type = state.cv_detected_type
+            if not obj_type:
+                run_cv_analysis()
+                obj_type = state.cv_detected_type
+                if not obj_type:
+                    state.cv_status = "Please analyze an object photo first."
+                    return
+
+            params = {}
+            if obj_type == "bracket":
+                params = {
+                    "leg_x": float(state.cv_param_leg_x),
+                    "leg_y": float(state.cv_param_leg_y),
+                    "width": float(state.cv_param_width),
+                    "thickness": float(state.cv_param_thickness),
+                    "hole_radius": float(state.cv_param_hole_radius),
+                }
+            elif obj_type == "plate_hole":
+                params = {
+                    "length": float(state.cv_param_length),
+                    "width": float(state.cv_param_width),
+                    "thickness": float(state.cv_param_thickness),
+                    "hole_diameter": float(state.cv_param_hole_diameter),
+                }
+            elif obj_type == "beam":
+                params = {
+                    "length": float(state.cv_param_length),
+                    "height": float(state.cv_param_height),
+                    "width": float(state.cv_param_width),
+                }
+            elif obj_type == "ibeam":
+                params = {
+                    "length": float(state.cv_param_length),
+                    "height": float(state.cv_param_height),
+                    "flange_width": float(state.cv_param_flange_width),
+                    "flange_thickness": float(state.cv_param_flange_thickness),
+                    "web_thickness": float(state.cv_param_web_thickness),
+                }
+            elif obj_type == "shaft":
+                params = {
+                    "length": float(state.cv_param_length),
+                    "diameter_main": float(state.cv_param_diameter_main),
+                    "diameter_step": float(state.cv_param_diameter_step),
+                    "step_length": float(state.cv_param_step_length),
+                }
+            elif obj_type == "pipe":
+                params = {
+                    "length": float(state.cv_param_length),
+                    "outer_diameter": float(state.cv_param_outer_diameter),
+                    "inner_diameter": float(state.cv_param_inner_diameter),
+                }
+
+            out_step = Path(state.cv_step_path).resolve()
+            out_step.parent.mkdir(parents=True, exist_ok=True)
+            state.cv_status = f"Generating 3D OpenCASCADE STEP CAD solid for {obj_type}..."
+            generate_cad_from_parameters(obj_type, params, out_step)
+
+            state.cv_status = f"Generated {out_step.name}. Meshing solid and solving..."
+            state.geom_mode = "cv"
+            if state.config_mode == "interactive":
+                _rebuild_spec_from_interactive()
+            run_solve()
+            state.cv_status = f"Active: {state.cv_friendly_name} loaded and meshed in CAD engine!"
+        except Exception as e:
+            traceback.print_exc()
+            state.cv_status = f"CAD generation error: {e}"
+
     ctrl.apply_current_load = apply_current_load
     ctrl.add_support_to_list = add_support_to_list
     ctrl.remove_support = remove_support
     ctrl.remove_load = remove_load
     ctrl.clear_all_loads = clear_all_loads
     ctrl.convert_image_drawing_to_cad = convert_image_drawing_to_cad
+    ctrl.run_cv_analysis = run_cv_analysis
+    ctrl.generate_cv_cad_and_load = generate_cv_cad_and_load
 
     # Force direction presets
     def _set_force_preset(key):
@@ -764,6 +901,37 @@ def main(argv=None):
         "image_scale_x": 2.0,
         "image_scale_y": 2.0,
         "image_status": "Ready to convert image drawing to 3D STEP",
+        # Real-Life Object CV Mode
+        "cv_source_mode": "preset",
+        "cv_preset_items": [
+            {"title": "Structural L-Bracket (Real-Life Photo)", "value": "cad_models/cv_samples/bracket_photo.png"},
+            {"title": "Tensile Plate with Hole (Real-Life Photo)", "value": "cad_models/cv_samples/plate_hole_photo.png"},
+            {"title": "Rectangular Beam / Bar (Real-Life Photo)", "value": "cad_models/cv_samples/beam_photo.png"},
+            {"title": "Structural I-Beam Profile (Real-Life Photo)", "value": "cad_models/cv_samples/ibeam_photo.png"},
+            {"title": "Stepped Motor Shaft (Real-Life Photo)", "value": "cad_models/cv_samples/shaft_photo.png"},
+            {"title": "Hollow Tube / Pipe (Real-Life Photo)", "value": "cad_models/cv_samples/pipe_photo.png"},
+        ],
+        "cv_preset_path": "cad_models/cv_samples/bracket_photo.png",
+        "cv_custom_path": "",
+        "cv_image_b64": "",
+        "cv_ref_scale": 0.30,
+        "cv_status": "Ready to snap a camera photo or select a sample image.",
+        "cv_detected_type": "",
+        "cv_friendly_name": "",
+        "cv_confidence_pct": 0,
+        "cv_features_text": "",
+        "cv_annotated_preview": "",
+        "cv_step_path": "cad_models/cv_detected_object.step",
+        "cv_param_leg_x": 0.20, "cv_param_leg_y": 0.20,
+        "cv_param_width": 0.06, "cv_param_thickness": 0.015,
+        "cv_param_hole_radius": 0.008,
+        "cv_param_length": 0.40, "cv_param_height": 0.15,
+        "cv_param_hole_diameter": 0.06,
+        "cv_param_flange_width": 0.12, "cv_param_flange_thickness": 0.02,
+        "cv_param_web_thickness": 0.015,
+        "cv_param_diameter_main": 0.08, "cv_param_diameter_step": 0.05,
+        "cv_param_step_length": 0.20,
+        "cv_param_outer_diameter": 0.10, "cv_param_inner_diameter": 0.07,
         # Material
         "mat_preset": "Steel",
         "mat_preset_items": list(MATERIAL_PRESETS),
@@ -966,6 +1134,8 @@ def main(argv=None):
                                             size="small", classes="flex-grow-1")
                                     v3.VBtn("Import CAD (STEP)", value="step",
                                             size="small", classes="flex-grow-1")
+                                    v3.VBtn("Real-Life CV Mode", value="cv",
+                                            size="small", classes="flex-grow-1")
 
                                 # Parametric box
                                 with html.Div(v_show="geom_mode === 'box'"):
@@ -1038,6 +1208,148 @@ def main(argv=None):
                                         v3.VBtn("Convert Drawing to 3D STEP", size="small", block=True,
                                                 variant="outlined", color="secondary", click=ctrl.convert_image_drawing_to_cad)
                                         html.Div("{{ image_status }}", classes="text-caption text-medium-emphasis mt-1")
+
+                                # Real-Life CV Object Detector & Parametric CAD Mode
+                                with html.Div(v_show="geom_mode === 'cv'"):
+                                    html.Div(
+                                        "Take a real-life object photo (via webcam or image) to detect its category, parameterize its geometry, and generate a 3D CAD STEP solid.",
+                                        classes="text-caption text-medium-emphasis mb-2",
+                                    )
+
+                                    # Input source toggle: Presets, Upload file, Webcam snapshot
+                                    with v3.VBtnToggle(
+                                        v_model=("cv_source_mode",), mandatory=True,
+                                        density="compact", divided=True, color="primary",
+                                        classes="mb-2 w-100",
+                                    ):
+                                        v3.VBtn("Sample Photo", value="preset", size="x-small", classes="flex-grow-1")
+                                        v3.VBtn("File Path", value="upload", size="x-small", classes="flex-grow-1")
+                                        v3.VBtn("Webcam / Camera", value="webcam", size="x-small", classes="flex-grow-1")
+
+                                    with html.Div(v_show="cv_source_mode === 'preset'"):
+                                        v3.VSelect(
+                                            v_model=("cv_preset_path",), items=("cv_preset_items",),
+                                            item_title="title", item_value="value",
+                                            label="Real-Life Object Photo Preset",
+                                            density="compact", hide_details=True, classes="mb-2",
+                                        )
+
+                                    with html.Div(v_show="cv_source_mode === 'upload'"):
+                                        v3.VTextField(
+                                            v_model=("cv_custom_path",),
+                                            label="Image File Path (PNG / JPG)",
+                                            density="compact", hide_details=True, classes="mb-2",
+                                        )
+
+                                    with html.Div(v_show="cv_source_mode === 'webcam'"):
+                                        html.Input(
+                                            id="mos_cam_input", type="file", accept="image/*", capture="environment",
+                                            style="display:none;",
+                                            onchange="const f=event.target.files[0]; if (f) { const r=new FileReader(); r.onload=(e)=>{ window.trame.state.set('cv_image_b64', e.target.result); }; r.readAsDataURL(f); }",
+                                        )
+                                        v3.VBtn("Snap Photo with Camera", icon="mdi-camera", color="primary", size="small",
+                                                block=True, classes="mb-2", click="document.getElementById('mos_cam_input').click()")
+                                        html.Div("Camera photo ready for analysis", classes="text-caption text-success mb-1",
+                                                 v_show="cv_image_b64.length > 0")
+
+                                    # Dimension reference calibration scale
+                                    with html.Div(classes="d-flex align-center ga-1 mb-2"):
+                                        v3.VTextField(
+                                            v_model=("cv_ref_scale",), label="Reference Scale (m)",
+                                            type="number", step=0.05, density="compact", hide_details=True,
+                                            classes="flex-grow-1",
+                                        )
+                                        v3.VBtn("Run CV Model", color="secondary", variant="tonal", size="small",
+                                                click=ctrl.run_cv_analysis)
+
+                                    # CV Detection results preview
+                                    with html.Div(v_show="cv_detected_type !== ''", classes="mt-2"):
+                                        with html.Div(classes="d-flex align-center justify-space-between mb-1"):
+                                            v3.VChip("{{ cv_friendly_name }}", color="success", size="small", classes="font-weight-bold")
+                                            v3.VChip("{{ cv_confidence_pct }}% confidence", color="info", size="x-small", variant="outlined")
+
+                                        html.Img(
+                                            src=("cv_annotated_preview",),
+                                            style="width:100%; max-height:200px; object-fit:contain; border-radius:6px; background:#111;",
+                                            classes="mb-2",
+                                        )
+                                        html.Div(
+                                            "{{ cv_features_text }}",
+                                            style="white-space:pre-line; font-size:11px;",
+                                            classes="text-medium-emphasis mb-2 pa-2 bg-surface-variant rounded",
+                                        )
+
+                                        # Dynamic Parametric Inputs
+                                        html.Div("Extracted CAD Parameters (meters):", classes="text-caption font-weight-bold mb-1")
+
+                                        # Bracket parameters
+                                        with html.Div(v_show="cv_detected_type === 'bracket'", classes="d-flex flex-column ga-1 mb-2"):
+                                            with html.Div(classes="d-flex ga-1"):
+                                                v3.VTextField(v_model=("cv_param_leg_x",), label="Leg X (m)", type="number", step=0.01, density="compact", hide_details=True)
+                                                v3.VTextField(v_model=("cv_param_leg_y",), label="Leg Y (m)", type="number", step=0.01, density="compact", hide_details=True)
+                                            with html.Div(classes="d-flex ga-1"):
+                                                v3.VTextField(v_model=("cv_param_width",), label="Width W (m)", type="number", step=0.01, density="compact", hide_details=True)
+                                                v3.VTextField(v_model=("cv_param_thickness",), label="Thickness T (m)", type="number", step=0.005, density="compact", hide_details=True)
+                                                v3.VTextField(v_model=("cv_param_hole_radius",), label="Hole Radius (m)", type="number", step=0.002, density="compact", hide_details=True)
+
+                                        # Plate hole parameters
+                                        with html.Div(v_show="cv_detected_type === 'plate_hole'", classes="d-flex flex-column ga-1 mb-2"):
+                                            with html.Div(classes="d-flex ga-1"):
+                                                v3.VTextField(v_model=("cv_param_length",), label="Length (m)", type="number", step=0.02, density="compact", hide_details=True)
+                                                v3.VTextField(v_model=("cv_param_width",), label="Width (m)", type="number", step=0.01, density="compact", hide_details=True)
+                                            with html.Div(classes="d-flex ga-1"):
+                                                v3.VTextField(v_model=("cv_param_thickness",), label="Thickness (m)", type="number", step=0.005, density="compact", hide_details=True)
+                                                v3.VTextField(v_model=("cv_param_hole_diameter",), label="Hole Diameter (m)", type="number", step=0.005, density="compact", hide_details=True)
+
+                                        # Beam parameters
+                                        with html.Div(v_show="cv_detected_type === 'beam'", classes="d-flex ga-1 mb-2"):
+                                            v3.VTextField(v_model=("cv_param_length",), label="Length (m)", type="number", step=0.05, density="compact", hide_details=True)
+                                            v3.VTextField(v_model=("cv_param_height",), label="Height (m)", type="number", step=0.01, density="compact", hide_details=True)
+                                            v3.VTextField(v_model=("cv_param_width",), label="Width (m)", type="number", step=0.01, density="compact", hide_details=True)
+
+                                        # I-Beam parameters
+                                        with html.Div(v_show="cv_detected_type === 'ibeam'", classes="d-flex flex-column ga-1 mb-2"):
+                                            with html.Div(classes="d-flex ga-1"):
+                                                v3.VTextField(v_model=("cv_param_length",), label="Length (m)", type="number", step=0.05, density="compact", hide_details=True)
+                                                v3.VTextField(v_model=("cv_param_height",), label="Height (m)", type="number", step=0.01, density="compact", hide_details=True)
+                                            with html.Div(classes="d-flex ga-1"):
+                                                v3.VTextField(v_model=("cv_param_flange_width",), label="Flange Width (m)", type="number", step=0.01, density="compact", hide_details=True)
+                                                v3.VTextField(v_model=("cv_param_flange_thickness",), label="Flange Thick (m)", type="number", step=0.005, density="compact", hide_details=True)
+                                                v3.VTextField(v_model=("cv_param_web_thickness",), label="Web Thick (m)", type="number", step=0.005, density="compact", hide_details=True)
+
+                                        # Shaft parameters
+                                        with html.Div(v_show="cv_detected_type === 'shaft'", classes="d-flex flex-column ga-1 mb-2"):
+                                            with html.Div(classes="d-flex ga-1"):
+                                                v3.VTextField(v_model=("cv_param_length",), label="Length (m)", type="number", step=0.05, density="compact", hide_details=True)
+                                                v3.VTextField(v_model=("cv_param_diameter_main",), label="Main Diam (m)", type="number", step=0.01, density="compact", hide_details=True)
+                                            with html.Div(classes="d-flex ga-1"):
+                                                v3.VTextField(v_model=("cv_param_diameter_step",), label="Step Diam (m)", type="number", step=0.01, density="compact", hide_details=True)
+                                                v3.VTextField(v_model=("cv_param_step_length",), label="Step Len (m)", type="number", step=0.01, density="compact", hide_details=True)
+
+                                        # Pipe parameters
+                                        with html.Div(v_show="cv_detected_type === 'pipe'", classes="d-flex flex-column ga-1 mb-2"):
+                                            with html.Div(classes="d-flex ga-1"):
+                                                v3.VTextField(v_model=("cv_param_length",), label="Length (m)", type="number", step=0.05, density="compact", hide_details=True)
+                                                v3.VTextField(v_model=("cv_param_outer_diameter",), label="Outer Diam (m)", type="number", step=0.01, density="compact", hide_details=True)
+                                                v3.VTextField(v_model=("cv_param_inner_diameter",), label="Inner Diam (m)", type="number", step=0.01, density="compact", hide_details=True)
+
+                                        # Mesh size & Solid conversion button
+                                        with html.Div(classes="d-flex align-center ga-2 mb-2"):
+                                            html.Span("CAD Mesh size:", classes="text-caption")
+                                            v3.VSlider(
+                                                v_model=("cad_mesh_size",),
+                                                min=0.02, max=0.5, step=0.01,
+                                                density="compact", hide_details=True,
+                                                classes="flex-grow-1",
+                                            )
+                                            html.Span("{{ cad_mesh_size }} m",
+                                                      classes="text-caption font-weight-bold",
+                                                      style="min-width:48px; text-align:right")
+
+                                        v3.VBtn("Generate 3D CAD Solid & Solve FEA", color="primary", size="small", block=True,
+                                                prepend_icon="mdi-cube-outline", click=ctrl.generate_cv_cad_and_load, classes="mt-1")
+
+                                    html.Div("{{ cv_status }}", classes="text-caption text-medium-emphasis mt-1")
 
                             # 2. Material
                             with v3.VCard(variant="outlined", classes="pa-3 mb-2 rounded-lg"):

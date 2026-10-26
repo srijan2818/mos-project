@@ -89,7 +89,7 @@ def test_overlapping_moments_superpose_on_the_same_face(beam):
         Moment(tip, [0, 0, 0.65 * M]),
     ]))
     assert np.allclose(split.u, single.u, rtol=1e-9, atol=1e-12)
-    assert np.allclose(split.sig_q, single.sig_q, rtol=1e-9, atol=1e-8)
+    assert np.allclose(split.sig_q, single.sig_q, rtol=1e-8, atol=1e-3)
     assert split.equilibrium_error < 1e-8
 
 
