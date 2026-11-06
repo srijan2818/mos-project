@@ -1,0 +1,15 @@
+numpy
+scipy
+scikit-fem>=8
+meshio
+pytest
+# app
+pyvista
+trame
+trame-vtk
+trame-vuetify
+trame-pyvista
+gmsh
+# cv
+transformers>=4.45
+torch>=2.0
