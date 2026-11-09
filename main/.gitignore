@@ -1,3 +1,6 @@
 cad_models/_generated/
 __pycache__/
 .pytest_cache/
+.pixi/
+.pixi_bin/
+.cache/

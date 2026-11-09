@@ -18,6 +18,7 @@ angular velocity, not transient dynamics.
 | inspect solved point stresses and plane tractions | [learning-lab.md](learning-lab.md) |
 | turn one image into a colored 3D preview and optional STEP silhouette | [image-reconstruction.md](image-reconstruction.md) |
 | turn multiple object photos into NeRF / Gaussian-splat datasets | [app.md](app.md#multi-view-nerf--gaussian-splatting-and-gaussian-to-cad-preparation) |
+| package and deploy across Linux, macOS, and Windows | [packaging.md](packaging.md) |
 
 ## Quick start
 

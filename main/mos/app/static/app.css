@@ -60,3 +60,60 @@
   background: #2196f3; color: #fff; border: 0; cursor: pointer; }
 .mos-camera-bar button[data-act=cancel] { background: #52525b; }
 .mos-camera-count { color: #e5e7eb; font: 600 14px sans-serif; }
+
+/* 3D Viewport Controls & Legend HUD overlays */
+.mos-viewport-hud {
+    position: absolute !important;
+    top: 16px; left: 16px; z-index: 100;
+    background: rgba(15, 23, 42, 0.78);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 10px;
+    color: #e2e8f0; font-size: 11px;
+    padding: 6px 14px;
+    display: flex; flex-wrap: wrap; gap: 14px; align-items: center;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+    pointer-events: none;
+    user-select: none;
+}
+.mos-viewport-legend {
+    position: absolute !important;
+    bottom: 16px; left: 16px; z-index: 100;
+    background: rgba(15, 23, 42, 0.78);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 10px;
+    color: #e2e8f0; font-size: 11px;
+    padding: 6px 14px;
+    display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+    pointer-events: none;
+    user-select: none;
+}
+.mos-legend-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+}
+.plane-preset-btn {
+    font-size: 10px !important;
+    letter-spacing: 0.02em !important;
+    font-weight: 600 !important;
+    text-transform: none !important;
+    padding: 0 6px !important;
+    min-width: 32px !important;
+    height: 24px !important;
+}
+.probe-preset-btn {
+    font-size: 10px !important;
+    letter-spacing: 0.01em !important;
+    font-weight: 600 !important;
+    text-transform: none !important;
+    padding: 0 8px !important;
+    height: 24px !important;
+}
+

@@ -222,7 +222,24 @@ def main(argv=None):
                         cv_source=None, cv_auto_points=[], cv_auto_bbox=None,
                         mv3_rig=None, mv3_masks={}, mv3_sig=None, cv_exclude=None,
                         cv_prior=None,
-                        cv_mask=None)
+                        cv_mask=None,
+                        cancel_event=threading.Event())
+
+    def cancel_current_operation():
+        """Globally cancel any running background solver, CV analysis, or reconstruction task."""
+        S.cancel_event.set()
+        state.is_busy = False
+        state.busy_task_name = ""
+        state.busy_task_desc = ""
+        state.solve_running = False
+        state.cv_running = False
+        state.cv3d_running = False
+        state.mv3_running = False
+        state.status = "Operation cancelled by user."
+        state.status_type = "warning"
+        state.cv_status = "Cancelled."
+        state.cv3d_status = "Cancelled."
+        ctrl.view_update()
 
     def _spawn(worker, name):
         """Run ``worker(ui)`` off the UI thread; ``ui(fn)`` applies state changes on it.
@@ -232,10 +249,20 @@ def main(argv=None):
         which schedules it on the server's event loop inside ``with state:`` (flush).
         Without a running loop (offline smoke test, scripting) the worker runs inline.
         """
+        S.cancel_event.clear()
+        state.is_busy = True
+        state.busy_task_name = name.replace("mos-", "").replace("-", " ").title()
+        state.busy_task_desc = "Processing... Click Cancel to stop anytime."
+
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            worker(lambda fn: fn())
+            try:
+                worker(lambda fn: fn())
+            finally:
+                state.is_busy = False
+                state.busy_task_name = ""
+                state.busy_task_desc = ""
             return
 
         def ui(fn):
@@ -246,7 +273,17 @@ def main(argv=None):
                     fn()
             loop.call_soon_threadsafe(apply)
 
-        threading.Thread(target=worker, args=(ui,), name=name, daemon=True).start()
+        def _wrapped_worker(ui_cb):
+            try:
+                worker(ui_cb)
+            finally:
+                def _finish_busy():
+                    state.is_busy = False
+                    state.busy_task_name = ""
+                    state.busy_task_desc = ""
+                ui_cb(_finish_busy)
+
+        threading.Thread(target=_wrapped_worker, args=(ui,), name=name, daemon=True).start()
 
     def _displayed_mesh_points():
         """Mesh vertex positions after the current displacement scale is applied."""
@@ -293,10 +330,16 @@ def main(argv=None):
                     point = np.array([
                         float(state.point_x), float(state.point_y), float(state.point_z),
                     ])
-                marker = pv.Sphere(radius=max(0.02 * diag, 1e-4), center=point)
-                actor = pl.add_mesh(marker, color="#f59e0b", opacity=0.95,
+                # High-visibility target probe (central beacon + outer target halo)
+                beacon_r = max(0.016 * diag, 1e-4)
+                marker = pv.Sphere(radius=beacon_r, center=point)
+                actor = pl.add_mesh(marker, color="#f59e0b", opacity=1.0,
                                      pickable=False, reset_camera=False, render=False)
                 S.analysis_actors.append(actor)
+                halo = pv.Sphere(radius=beacon_r * 2.2, center=point)
+                actor_halo = pl.add_mesh(halo, color="#fbbf24", opacity=0.30,
+                                          pickable=False, reset_camera=False, render=False)
+                S.analysis_actors.append(actor_halo)
             except Exception as exc:
                 log.warning("update_analysis_overlay: %s: %s", type(exc).__name__, exc)
 
@@ -315,24 +358,40 @@ def main(argv=None):
                     if not np.isfinite(normal_length) or normal_length < 1e-14:
                         raise ValueError("Plane normal must be finite and non-zero")
                     normal /= normal_length
-                    plane_size = max(0.12 * diag, 1e-3)
+                    plane_size = max(0.24 * diag, 2e-3)
                     plane_mesh = pv.Plane(
                         center=sample_xyz, direction=normal,
                         i_size=plane_size, j_size=plane_size,
                         i_resolution=1, j_resolution=1,
                     )
                     actor = pl.add_mesh(
-                        plane_mesh, color="#38bdf8", opacity=0.20,
-                        show_edges=True, edge_color="#7dd3fc", line_width=1.25,
-                        pickable=False, reset_camera=False, render=False,
+                        plane_mesh, color="#0284c7", opacity=0.45,
+                        show_edges=True, edge_color="#38bdf8", line_width=3.0,
+                        culling=False, pickable=False, reset_camera=False, render=False,
                     )
                     S.analysis_actors.append(actor)
+
+                    disc_fn = getattr(pv, "Disc", None)
+                    if disc_fn is not None:
+                        try:
+                            disc_mesh = disc_fn(
+                                center=sample_xyz, inner=0, outer=plane_size * 0.48,
+                                normal=normal, c_res=36
+                            )
+                            actor_disc = pl.add_mesh(
+                                disc_mesh, color="#38bdf8", opacity=0.30,
+                                show_edges=True, edge_color="#e0f2fe", line_width=1.5,
+                                culling=False, pickable=False, reset_camera=False, render=False,
+                            )
+                            S.analysis_actors.append(actor_disc)
+                        except Exception:
+                            pass
 
                     normal_glyph = viz.create_arrow_glyph(
                         sample_xyz, normal, diag, reference_magnitude=1.0
                     )
                     if normal_glyph is not None:
-                        actor = pl.add_mesh(normal_glyph, color="#22c55e",
+                        actor = pl.add_mesh(normal_glyph, color="#10b981",
                                              pickable=False, reset_camera=False, render=False)
                         S.analysis_actors.append(actor)
 
@@ -443,12 +502,41 @@ def main(argv=None):
         diag = float(np.linalg.norm(np.ptp(np.asarray(S.grid.points), axis=0)))
         mesh_ref = S.model.mesh if S.model else None
 
-        # Highlight selected face
-        if bool(state.show_face_highlight) and state.selected_face:
-            face_mesh = viz.create_face_mesh(state.selected_face, bounds, mesh=mesh_ref)
-            if face_mesh is not None:
-                pl.add_mesh(face_mesh, color="#06b6d4", opacity=0.55,
-                            show_edges=True, line_width=2.5, edge_color="#22d3ee", pickable=False)
+        # Highlight support and load faces for clear visual feedback
+        if bool(state.show_face_highlight):
+            # 1. Render all active fixed support surfaces (Vibrant Crimson Red)
+            supported_faces = set()
+            for sup in getattr(state, "supports_list", []):
+                face_key = sup.get("face") if isinstance(sup, dict) else None
+                if not face_key or face_key in supported_faces:
+                    continue
+                supported_faces.add(face_key)
+                sup_mesh = viz.create_face_mesh(face_key, bounds, mesh=mesh_ref)
+                if sup_mesh is not None:
+                    pl.add_mesh(
+                        sup_mesh, color="#ef4444", opacity=0.60,
+                        show_edges=True, line_width=3.0, edge_color="#b91c1c", pickable=False,
+                    )
+
+            # 2. Highlight candidate support face if in loads/supports tab (Warm Coral/Orange)
+            if state.active_tab == "loads" and getattr(state, "support_face", None):
+                sup_candidate = state.support_face
+                if sup_candidate not in supported_faces:
+                    cand_mesh = viz.create_face_mesh(sup_candidate, bounds, mesh=mesh_ref)
+                    if cand_mesh is not None:
+                        pl.add_mesh(
+                            cand_mesh, color="#f97316", opacity=0.45,
+                            show_edges=True, line_width=2.5, edge_color="#ea580c", pickable=False,
+                        )
+
+            # 3. Highlight target load face (Cyan)
+            if state.selected_face and state.selected_face not in supported_faces:
+                face_mesh = viz.create_face_mesh(state.selected_face, bounds, mesh=mesh_ref)
+                if face_mesh is not None:
+                    pl.add_mesh(
+                        face_mesh, color="#06b6d4", opacity=0.55,
+                        show_edges=True, line_width=2.5, edge_color="#22d3ee", pickable=False,
+                    )
 
         # Point/plane annotations are maintained independently of the base mesh.
         update_analysis_overlay(render=False)
@@ -1165,13 +1253,22 @@ def main(argv=None):
         state.solve_running = True
 
         def _worker(ui):
+            if S.cancel_event.is_set():
+                ui(lambda: state.update({"solve_running": False}))
+                return
             try:
                 text, mesh = spec_text, None
                 if geometry_text is not None:
                     mesh = build(parse_spec(geometry_text))[0].mesh          # Gmsh: slow
                     text = _ui_wait(ui, lambda: _cad_spec_for_mesh(mesh))
+                if S.cancel_event.is_set():
+                    ui(lambda: state.update({"solve_running": False}))
+                    return
                 spec = parse_spec(text)
                 model, case = build(spec, mesh=mesh) if mesh is not None else build(spec)
+                if S.cancel_event.is_set():
+                    ui(lambda: state.update({"solve_running": False}))
+                    return
                 cached, res, live_status = None, None, None
                 try:
                     if model.bcs:
@@ -1191,9 +1288,15 @@ def main(argv=None):
                     live_status = (f"Live response cache unavailable: {cache_exc}. The model was solved "
                                    "normally; edit loads and use Solve to update the result.")
             except Exception as e:
+                if S.cancel_event.is_set():
+                    ui(lambda: state.update({"solve_running": False, "status": "Solve cancelled."}))
+                    return
                 traceback.print_exc()
                 error = e
                 ui(lambda: _solve_failed(error, on_done))
+                return
+            if S.cancel_event.is_set():
+                ui(lambda: state.update({"solve_running": False}))
                 return
             ui(lambda: _apply_solution(spec, text, model, case, res, cached, live_status,
                                        dropped, on_done))
@@ -1469,6 +1572,9 @@ def main(argv=None):
 
         def _worker(ui):
             t0 = time.perf_counter()
+            if S.cancel_event.is_set():
+                ui(lambda: state.update({"cv_running": False}))
+                return
             try:
                 kw = {"exclude": S.cv_exclude} if S.cv_exclude else {}
                 if S.cv_prior is not None:
@@ -1476,9 +1582,15 @@ def main(argv=None):
                 res = analyze_image_object(img_source, reference_scale=ref_scale,
                                            points=points, labels=labels, candidate=candidate, **kw)
             except Exception as e:
+                if S.cancel_event.is_set():
+                    ui(lambda: state.update({"cv_running": False, "cv_status": "CV analysis cancelled."}))
+                    return
                 traceback.print_exc()
                 message = f"CV analysis failed: {e}"
                 ui(lambda: state.update({"cv_running": False, "cv_status": message}))
+                return
+            if S.cancel_event.is_set():
+                ui(lambda: state.update({"cv_running": False}))
                 return
             elapsed = time.perf_counter() - t0
 
@@ -2150,6 +2262,11 @@ def main(argv=None):
 
         def _worker(ui):
             updates = {}
+            if S.cancel_event.is_set():
+                updates["cv3d_status"] = "Reconstruction cancelled."
+                updates["cv3d_running"] = False
+                ui(lambda: state.update(updates))
+                return
             try:
                 result = reconstruct_single_image(
                     {"name": str(getattr(state, "cv3d_image_name", "") or "uploaded_image"), "data": source},
@@ -2162,6 +2279,11 @@ def main(argv=None):
                     segmentation_mode=settings["segmentation_mode"],
                     export_step=True,
                 )
+                if S.cancel_event.is_set():
+                    updates["cv3d_status"] = "Reconstruction cancelled."
+                    updates["cv3d_running"] = False
+                    ui(lambda: state.update(updates))
+                    return
                 step_path = str(result.step_path) if result.step_path else ""
                 summary = (
                     f"Preview ready · {result.vertex_count:,} vertices · {result.face_count:,} faces\n"
@@ -2442,6 +2564,36 @@ def main(argv=None):
             _pick_point_direct(c[0], c[1], c[2])
 
     ctrl.snap_to_face_centroid = snap_to_face_centroid
+
+    def set_lab_plane(preset_name):
+        """Quick preset selector for plane orientation in Learning Lab."""
+        state.lab_plane_preset = str(preset_name)
+        _lab_plane_changed()
+
+    def snap_probe_to(location):
+        """Quick snap of analysis probe point to key geometric features."""
+        if S.grid is None:
+            return
+        bounds = S.grid.bounds
+        xmin, xmax, ymin, ymax, zmin, zmax = bounds
+        cx, cy, cz = (xmin + xmax) / 2.0, (ymin + ymax) / 2.0, (zmin + zmax) / 2.0
+        loc = str(location).lower()
+        if loc == "center":
+            _pick_point_direct(cx, cy, cz)
+        elif loc == "top":
+            _pick_point_direct(cx, ymax, cz)
+        elif loc == "bottom":
+            _pick_point_direct(cx, ymin, cz)
+        elif loc == "tip":
+            _pick_point_direct(xmax, cy, cz)
+        elif loc == "root":
+            _pick_point_direct(xmin, cy, cz)
+        elif loc == "origin":
+            _pick_point_direct(0.0, 0.0, 0.0)
+
+    ctrl.set_lab_plane = set_lab_plane
+    ctrl.snap_probe_to = snap_probe_to
+    ctrl.cancel_current_operation = cancel_current_operation
 
     # ------------------------------------------------------------------ learning lab helpers
     def _lab_float(name, fallback=0.0):
@@ -2829,6 +2981,10 @@ def main(argv=None):
         ],
         "cv_gaussian_calibrated_path": "",
         "cv_gaussian_scale_status": "",
+        # Global busy & cancel state
+        "is_busy": False,
+        "busy_task_name": "",
+        "busy_task_desc": "",
         # Material
         "mat_preset": "Steel",
         "mat_preset_items": list(MATERIAL_PRESETS),
@@ -2963,7 +3119,7 @@ def main(argv=None):
 
     @state.change("field", "stress_unit", "show_edges", "clip_axis", "clip_pos",
                   "show_glyphs", "show_face_highlight", "show_point_marker",
-                  "show_preview_glyph", "active_tab")
+                  "show_preview_glyph", "active_tab", "support_face", "supports_list")
     def _redraw(**_):
         update_scene()
 
@@ -3094,6 +3250,15 @@ def main(argv=None):
         # Learning Lab action now opens the integrated analysis dock over the
         # existing model instead of navigating to a separate full-page Lab.
         with layout.toolbar:
+            with html.Div(v_if="is_busy", classes="d-flex align-center ga-2 mr-3 px-3 py-1 rounded-pill",
+                          style="background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4);"):
+                v3.VProgressCircular(indeterminate=True, size=16, width=2, color="error")
+                html.Span("{{ busy_task_name }}: {{ busy_task_desc }}", classes="text-caption font-weight-bold text-error")
+                v3.VBtn(
+                    "Cancel", prepend_icon="mdi-close-circle",
+                    color="error", size="x-small", variant="flat",
+                    click=ctrl.cancel_current_operation,
+                )
             v3.VSpacer()
             v3.VBtn(
                 "Analysis workspace", prepend_icon="mdi-cube-scan",
@@ -3814,9 +3979,14 @@ def main(argv=None):
 
                         # ── SECTION A: Active Supports ──────────────────────
                         with v3.VCard(variant="tonal", classes="pa-3 mb-2 rounded-lg"):
-                            with html.Div(classes="d-flex align-center justify-space-between mb-2"):
-                                html.Span("Boundary Supports", classes="text-subtitle-2 font-weight-bold")
-                                v3.VChip("{{ supports_list.length }}", size="x-small", color="secondary")
+                            with html.Div(classes="d-flex align-center justify-space-between mb-1"):
+                                with html.Div(classes="d-flex align-center ga-1"):
+                                    v3.VIcon("mdi-shield-lock", size="small", color="error")
+                                    html.Span("Boundary Supports (Restraints)", classes="text-subtitle-2 font-weight-bold")
+                                v3.VChip("{{ supports_list.length }} fixed", size="x-small", color="error")
+
+                            html.Div("Fixed surfaces (shown in red on the 3D model) anchor the object in space.",
+                                     classes="text-caption text-medium-emphasis mb-2")
 
                             with html.Div(v_if="supports_list.length > 0", classes="mb-2"):
                                 with v3.VList(density="compact", classes="pa-0 rounded"):
@@ -3826,8 +3996,10 @@ def main(argv=None):
                                         style="border-bottom: 1px solid rgba(128,128,128,0.15);",
                                     ):
                                         with html.Template(v_slot_default=True):
-                                            html.Span("{{ sup.face }} · {{ sup.comps }}",
-                                                      classes="text-caption font-weight-medium")
+                                            with html.Div(classes="d-flex align-center ga-1"):
+                                                html.Span("■", style="color:#ef4444;font-size:14px;")
+                                                html.Span("Face {{ sup.face }}", classes="text-caption font-weight-bold")
+                                                v3.VChip("{{ sup.comps.toUpperCase() }}", size="x-small", variant="outlined", color="error", classes="ml-1")
                                         with html.Template(v_slot_append=True):
                                             v3.VBtn(
                                                 text="Remove", size="x-small", variant="text", color="error",
@@ -3835,16 +4007,16 @@ def main(argv=None):
                                             )
 
                             with html.Div(v_else=True, classes="text-caption text-medium-emphasis text-center pa-2"):
-                                html.Span("No supports applied yet.")
+                                html.Span("No supports applied yet. Without supports, the solver treats the body as free-floating.")
 
-                            v3.VDivider(classes="mb-2")
-                            html.Div("Define where the model is restrained", classes="text-caption text-medium-emphasis mb-2")
+                            v3.VDivider(classes="my-2")
+                            html.Div("Select a surface to anchor / clamp:", classes="text-caption font-weight-medium mb-1")
                             with html.Div(classes="d-flex flex-column ga-2 mb-2"):
                                 v3.VSelect(
                                     v_model=("support_face",),
                                     items=("face_options",),
                                     item_title="title", item_value="value",
-                                    label="Constrained surface",
+                                    label="Constrained surface (Orange preview in 3D)",
                                     density="compact", hide_details=True,
                                     classes="flex-grow-1",
                                 )
@@ -3852,13 +4024,13 @@ def main(argv=None):
                                     v_model=("support_comps",),
                                     items=("support_comp_options",),
                                     item_title="title", item_value="value",
-                                    label="Support condition",
+                                    label="Restraint type",
                                     density="compact", hide_details=True,
                                     classes="flex-grow-1",
                                 )
                             v3.VBtn(
-                                "Add Support", block=True, size="small",
-                                variant="tonal", color="secondary",
+                                "Clamp / Support Selected Surface", block=True, size="small",
+                                variant="flat", color="error", prepend_icon="mdi-pin",
                                 click=ctrl.add_support_to_list,
                             )
 
@@ -4169,6 +4341,36 @@ def main(argv=None):
                 with html.Div(v_show="active_page === 'workspace'", style="width:100%;height:100%;"):
                     with v3.VContainer(fluid=True, classes="pa-0 fill-height"):
                         with html.Div(style="position: relative; width: 100%; height: 100%; padding: 8px; box-sizing: border-box;"):
+                            # 3D Viewport Controls HUD (User Guidance)
+                            with html.Div(classes="mos-viewport-hud"):
+                                with html.Span(classes="d-flex align-center ga-1"):
+                                    v3.VIcon("mdi-mouse", size="x-small")
+                                    html.Span("Rotate: Left-drag")
+                                with html.Span(classes="d-flex align-center ga-1"):
+                                    v3.VIcon("mdi-magnify-plus-outline", size="x-small")
+                                    html.Span("Zoom: Right-drag / Scroll")
+                                with html.Span(classes="d-flex align-center ga-1"):
+                                    v3.VIcon("mdi-hand-back-left", size="x-small")
+                                    html.Span("Pan: Shift+Left-drag")
+                                with html.Span(classes="d-flex align-center ga-1"):
+                                    v3.VIcon("mdi-crosshairs-gps", size="x-small")
+                                    html.Span("Inspect: Click model")
+
+                            # 3D Scene Visual Legend HUD
+                            with html.Div(classes="mos-viewport-legend"):
+                                with html.Span(classes="mos-legend-chip"):
+                                    html.Span("■", style="color:#ef4444;font-size:14px;")
+                                    html.Span("Fixed Restraint")
+                                with html.Span(classes="mos-legend-chip"):
+                                    html.Span("■", style="color:#06b6d4;font-size:14px;")
+                                    html.Span("Target Face")
+                                with html.Span(classes="mos-legend-chip"):
+                                    html.Span("▲", style="color:#22c55e;font-size:12px;")
+                                    html.Span("Applied Force")
+                                with html.Span(classes="mos-legend-chip"):
+                                    html.Span("●", style="color:#f59e0b;font-size:12px;")
+                                    html.Span("Inspection Probe")
+
                             view = plotter_ui(pl, mode="server")
                             ctrl.view_update = view.update
 
@@ -4233,9 +4435,11 @@ def main(argv=None):
                                      classes="text-caption text-medium-emphasis mt-2")
 
                         with html.Div(classes="dock-section"):
-                            with html.Div(classes="d-flex justify-space-between align-center mb-2"):
-                                html.Div("Sample location", classes="dock-label mb-0")
-                                v3.VChip("CLICK MODEL TO PICK", color="info", variant="tonal", size="x-small")
+                            with html.Div(classes="d-flex justify-space-between align-center mb-1"):
+                                html.Div("Inspection Probe Point", classes="dock-label mb-0")
+                                v3.VChip("CLICK 3D MODEL TO PICK", color="warning", variant="flat", size="x-small")
+                            html.Div("Click anywhere on the 3D model surface to place the inspection probe.",
+                                     classes="text-caption text-medium-emphasis mb-2")
                             with html.Div(style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;"):
                                 v3.VTextField(v_model=("lab_point_x",), label="X (m)", type="number",
                                               density="compact", hide_details=True, variant="outlined")
@@ -4243,6 +4447,15 @@ def main(argv=None):
                                               density="compact", hide_details=True, variant="outlined")
                                 v3.VTextField(v_model=("lab_point_z",), label="Z (m)", type="number",
                                               density="compact", hide_details=True, variant="outlined")
+                            with html.Div(classes="d-flex flex-wrap ga-1 mt-2"):
+                                v3.VBtn("Center", size="x-small", variant="tonal", classes="probe-preset-btn",
+                                        click=(ctrl.snap_probe_to, "['center']"))
+                                v3.VBtn("Top (+Y)", size="x-small", variant="tonal", classes="probe-preset-btn",
+                                        click=(ctrl.snap_probe_to, "['top']"))
+                                v3.VBtn("Tip (+X)", size="x-small", variant="tonal", classes="probe-preset-btn",
+                                        click=(ctrl.snap_probe_to, "['tip']"))
+                                v3.VBtn("Root (-X)", size="x-small", variant="tonal", classes="probe-preset-btn",
+                                        click=(ctrl.snap_probe_to, "['root']"))
                             html.Div("{{ lab_status }}", classes="text-caption text-info mt-2")
                             html.Div("Nearest node {{ lab_node_index }} · {{ lab_point_coords }}",
                                      classes="text-caption text-medium-emphasis")
@@ -4251,13 +4464,13 @@ def main(argv=None):
                             html.Div("Stress at selected point", classes="dock-label")
                             with html.Div(style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;"):
                                 with html.Div(classes="pa-2 rounded", style="background:rgba(14,165,233,.12)"):
-                                    html.Div("von Mises", classes="text-caption")
+                                    html.Div("von Mises (Yield)", classes="text-caption")
                                     html.Div("{{ lab_fea_vm }}", classes="text-subtitle-2 font-weight-bold")
                                 with html.Div(classes="pa-2 rounded", style="background:rgba(139,92,246,.12)"):
-                                    html.Div("σ₁", classes="text-caption")
+                                    html.Div("σ₁ (Max Tension)", classes="text-caption")
                                     html.Div("{{ lab_sigma_1 }} MPa", classes="text-subtitle-2 font-weight-bold")
                                 with html.Div(classes="pa-2 rounded", style="background:rgba(245,158,11,.12)"):
-                                    html.Div("Max shear", classes="text-caption")
+                                    html.Div("Max Shear", classes="text-caption")
                                     html.Div("{{ lab_max_shear }}", classes="text-subtitle-2 font-weight-bold")
                             html.Div(v_html=("lab_matrix_html",), style="overflow-x:auto;", classes="mt-3")
 
@@ -4267,6 +4480,31 @@ def main(argv=None):
 
                         with html.Div(classes="dock-section"):
                             html.Div("Traction on selected plane", classes="dock-label")
+                            html.Div("A virtual cut through the material at the probe point. Normal stress (σₙ) acts perpendicular; shear stress (τ) acts parallel along the slice.",
+                                     classes="text-caption text-medium-emphasis mb-2")
+                            # Visual guide for 3D elements
+                            with html.Div(classes="d-flex align-center ga-3 mb-2 px-2 py-1 rounded",
+                                          style="background:rgba(15,23,42,.6);border:1px solid rgba(148,163,184,.15);font-size:11px;"):
+                                with html.Span(classes="d-flex align-center ga-1"):
+                                    html.Span("■", style="color:#0284c7;font-size:13px;")
+                                    html.Span("Cut Plane", classes="text-caption")
+                                with html.Span(classes="d-flex align-center ga-1"):
+                                    html.Span("▲", style="color:#10b981;font-size:11px;")
+                                    html.Span("Normal n", classes="text-caption font-weight-bold")
+                                with html.Span(classes="d-flex align-center ga-1"):
+                                    html.Span("▲", style="color:#f59e0b;font-size:11px;")
+                                    html.Span("Traction t", classes="text-caption font-weight-bold")
+                            # Quick Preset Pills
+                            with html.Div(classes="d-flex flex-wrap ga-1 mb-2"):
+                                v3.VBtn("+X", size="x-small", variant="tonal", classes="plane-preset-btn", click=(ctrl.set_lab_plane, "['+X']"))
+                                v3.VBtn("-X", size="x-small", variant="tonal", classes="plane-preset-btn", click=(ctrl.set_lab_plane, "['-X']"))
+                                v3.VBtn("+Y", size="x-small", variant="tonal", classes="plane-preset-btn", click=(ctrl.set_lab_plane, "['+Y']"))
+                                v3.VBtn("-Y", size="x-small", variant="tonal", classes="plane-preset-btn", click=(ctrl.set_lab_plane, "['-Y']"))
+                                v3.VBtn("+Z", size="x-small", variant="tonal", classes="plane-preset-btn", click=(ctrl.set_lab_plane, "['+Z']"))
+                                v3.VBtn("-Z", size="x-small", variant="tonal", classes="plane-preset-btn", click=(ctrl.set_lab_plane, "['-Z']"))
+                                v3.VBtn("Principal 1", size="x-small", variant="tonal", classes="plane-preset-btn", click=(ctrl.set_lab_plane, "['Principal 1']"))
+                                v3.VBtn("Principal 2", size="x-small", variant="tonal", classes="plane-preset-btn", click=(ctrl.set_lab_plane, "['Principal 2']"))
+                                v3.VBtn("Principal 3", size="x-small", variant="tonal", classes="plane-preset-btn", click=(ctrl.set_lab_plane, "['Principal 3']"))
                             v3.VSelect(
                                 v_model=("lab_plane_preset",), items=("lab_plane_items",),
                                 label="Plane normal", density="compact", hide_details=True,
@@ -4281,10 +4519,10 @@ def main(argv=None):
                                 html.Span("{{ lab_plane_traction }}", classes="text-caption font-weight-bold")
                             with html.Div(style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;"):
                                 with html.Div(classes="pa-2 rounded", style="background:rgba(14,165,233,.10)"):
-                                    html.Div("Normal stress σₙ", classes="text-caption")
+                                    html.Div("Normal stress σₙ (Perpendicular)", classes="text-caption")
                                     html.Div("{{ lab_normal_stress }}", classes="text-subtitle-2 font-weight-bold")
                                 with html.Div(classes="pa-2 rounded", style="background:rgba(245,158,11,.10)"):
-                                    html.Div("Shear magnitude τ", classes="text-caption")
+                                    html.Div("Shear magnitude τ (Parallel)", classes="text-caption")
                                     html.Div("{{ lab_plane_shear }}", classes="text-subtitle-2 font-weight-bold")
 
                         with html.Div(classes="dock-section"):

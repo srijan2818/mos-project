@@ -8,6 +8,23 @@ _Last updated: 2026-11-09_
 
 ## Done
 
+### UI User-Friendliness, Global Operation Cancellation & Universal Packaging (2026-11-09)
+
+* **UI Enhancements (Strictly non-breaking UI/visual additions):**
+  * **Support surfaces visualization**: All active restraints (`state.supports_list`) now render directly on the 3D model in vibrant crimson red (`#ef4444`) with bold boundary outlines (`#b91c1c`). Candidate support faces chosen in the dropdown are highlighted in warm coral (`#f97316`) before being added.
+  * **Plane selection & inspection slice**: The analysis plane is enlarged to 24% of the model diagonal and rendered with high-contrast, double-sided blue shading (`#0284c7`), a smooth circular disc overlay, an emerald green normal arrow $\mathbf{n}$, and an amber traction response arrow $\mathbf{t}$. Added one-click quick preset buttons (`+X`, `-X`, `+Y`, `-Y`, `+Z`, `-Z`, `Principal 1–3`) and friendly explanations.
+  * **Point selection probe**: Replaced single-point dot with a high-visibility inspection probe (core beacon + outer translucent target halo), quick snap buttons (`Center`, `Top`, `Tip`, `Root`), and click hints.
+  * **Viewport controls HUD & Scene Legend**: Floating glassmorphic HUD badge guiding non-technical users on mouse navigation (rotate, zoom, pan, pick) and color-coded scene legend.
+* **Global Operation Cancellation**:
+  * Cooperative `S.cancel_event` wired into background workers (`run_solve`, `_run_cv`, `run_cv_universal_reconstruction`).
+  * Floating top-bar progress and cancellation banner with spinning indicator and one-click "Cancel Operation" button. Resets running flags and statuses cleanly.
+* **Universal Cross-Platform Packaging**:
+  * `pixi.toml`: Cross-platform configuration for Windows, macOS (Intel & Apple Silicon), and Linux with pre-compiled native libraries (`scikit-fem`, `gmsh`, `pyvista`, `torch`, `transformers`).
+  * `run_app.sh` (Linux/macOS) & `run_app.bat` (Windows): 1-click self-bootstrapping launchers that set up the environment and open `http://localhost:8080`.
+  * `Dockerfile` & `docker-compose.yml`: Containerized deployment with pre-baked dependencies and persistent Hugging Face cache.
+  * `docs/packaging.md`: Comprehensive documentation on packaging and offline model pre-caching.
+* Verified: 112 passed, 1 skipped in pytest; `tools/smoke_app.py`, `gen_api_docs.py --check`, and `test_docstrings.py` all pass.
+
 ### Three-view solid on an L-shaped marker mat, Step 2 (2026-11-09, night)
 
 `pytest -q` **226 passed**. Installed with your OK: `opencv-contrib-python` 5.0 and

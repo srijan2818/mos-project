@@ -1,0 +1,19 @@
+services:
+  mos-analyzer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mos-analyzer:latest
+    container_name: mos-analyzer
+    ports:
+      - "8080:8080"
+    volumes:
+      # Persistent cache for downloaded Hugging Face weights (Depth Anything, SAM 2, DINO)
+      - mos_hf_cache:/root/.cache/huggingface
+      # Persist generated models and sessions
+      - ./cad_models/_generated:/app/cad_models/_generated
+    restart: unless-stopped
+
+volumes:
+  mos_hf_cache:
+    name: mos_hf_cache

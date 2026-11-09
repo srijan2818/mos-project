@@ -395,7 +395,7 @@ def test_face_pressure_accepts_an_expression(env):
     assert "pressure" in s.spec_text and "2*1e6" in s.spec_text
 
 
-def test_click_mapping_handles_the_letterbox():
+def test_click_mapping_handles_the_letterbox(env):
     # 1600x900 image shown in a 400x240 box with object-fit: contain -> 400x225, 7.5 px bars
     from mos.app.main import _click_to_image
     assert _click_to_image(200, 120, 400, 240, 1600, 900) == pytest.approx((800, 450))

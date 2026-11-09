@@ -45,4 +45,5 @@ body     0, -rho*9.81, 0
 | [docs/image-reconstruction.md](docs/image-reconstruction.md) | single-image reconstruction, masking, depth relief, and CAD export limits |
 | [docs/learning-lab.md](docs/learning-lab.md) | stress tensor explorer, principal planes, Mohr circles and quick checks |
 | [docs/testing.md](docs/testing.md) | what is tested, what is not, first-run checklist |
+| [docs/packaging.md](docs/packaging.md) | packaging and 1-click deployment on Linux, macOS, and Windows |
 | [docs/api.md](docs/api.md) | API reference (generated from the source) |
