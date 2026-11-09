@@ -1,0 +1,62 @@
+/* MoS app styles, served by the trame module in main.py.
+   (Vue drops <style> tags inside templates, so these can't live in the layout.) */
+.mos-analysis-dock {
+    /* Keep the dock out of the VTK host's layout/stacking context.
+       It overlays the model without resizing or reflowing the canvas. */
+    position: fixed !important; z-index: 10000 !important;
+    top: 76px; right: 14px; bottom: 14px;
+    box-sizing: border-box; width: min(460px, calc(100vw - 28px));
+    display: flex; flex-direction: column; min-height: 0;
+    overflow: hidden; border: 1px solid rgba(148,163,184,.26);
+    border-radius: 14px; background: rgba(20,22,27,.985);
+    box-shadow: 0 18px 55px rgba(0,0,0,.48); color: #e5e7eb;
+    pointer-events: auto;
+}
+.mos-analysis-dock .v-card { color: #e5e7eb; }
+.mos-analysis-dock .v-expansion-panel, .mos-analysis-dock .v-expansion-panel-text, .mos-analysis-dock .v-field { background-color: #222630 !important; color: #e5e7eb !important; }
+.mos-analysis-dock .v-field__input, .mos-analysis-dock .v-label { color: #cbd5e1 !important; }
+.mos-analysis-dock .text-subtitle-1 { letter-spacing: -.02em; }
+.mos-analysis-dock .v-card-text { min-height: 0; }
+.mos-analysis-dock .text-medium-emphasis { color: #a1a1aa !important; }
+.mos-analysis-dock .text-caption { color: #a1a1aa; }
+.mos-analysis-dock .v-field--variant-outlined .v-field__outline { opacity: .55; }
+.mos-analysis-dock .v-slider { margin-top: 4px; }
+.mos-analysis-dock svg { display: block; width: 100%; max-width: 100%; height: auto; }
+.mos-analysis-dock table th { padding: 6px 5px; }
+.mos-analysis-dock table td { padding: 6px 5px; border-top: 1px solid #343840; }
+.mos-analysis-dock .dock-section {
+    border: 1px solid rgba(148,163,184,.16); border-radius: 12px;
+    background: linear-gradient(145deg, rgba(39,42,49,.84), rgba(28,30,36,.76));
+    padding: 12px; margin-bottom: 10px;
+}
+.mos-analysis-dock .dock-label {
+    font-size: 10px; letter-spacing: .11em; text-transform: uppercase;
+    font-weight: 800; color: #9cc9ff; margin-bottom: 8px;
+}
+.mos-analysis-dock .mos-lab-formula {
+    font-family: 'STIX Two Math', 'Cambria Math', Georgia, serif;
+    font-size: 14px; line-height: 1.7; letter-spacing: .01em;
+    color: #dbeafe; padding: 10px 12px; border-radius: 9px;
+    border: 1px solid rgba(96,165,250,.2); background: rgba(37,99,235,.10);
+    overflow-wrap: anywhere;
+}
+.mos-analysis-dock .v-expansion-panel { background: rgba(39,42,49,.55); }
+.mos-analysis-dock .v-expansion-panel-title { font-weight: 650; }
+.mos-analysis-dock .v-field { border-radius: 9px; }
+.mos-analysis-dock .v-btn { letter-spacing: .01em; }
+@media (max-width: 700px) {
+    .mos-analysis-dock { left: 8px; right: 8px; width: auto; top: 72px; bottom: 8px; }
+}
+/* Long labels in full-width drawer buttons wrap instead of spilling past the button. */
+.v-navigation-drawer .v-btn--block .v-btn__content { white-space: normal; text-align: center; }
+.v-navigation-drawer .v-btn--block { height: auto !important; min-height: 28px; padding-top: 4px; padding-bottom: 4px; }
+
+/* Live camera capture dialog (upload.js) */
+.mos-camera { position: fixed; inset: 0; z-index: 20000; background: rgba(0,0,0,.85);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; }
+.mos-camera video { max-width: 92vw; max-height: 78vh; border-radius: 10px; background: #000; }
+.mos-camera-bar { display: flex; gap: 12px; }
+.mos-camera-bar button { padding: 8px 22px; border-radius: 8px; font-weight: 700;
+  background: #2196f3; color: #fff; border: 0; cursor: pointer; }
+.mos-camera-bar button[data-act=cancel] { background: #52525b; }
+.mos-camera-count { color: #e5e7eb; font: 600 14px sans-serif; }

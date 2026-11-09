@@ -1,0 +1,17 @@
+numpy
+scipy>=1.12        # cg(rtol=...) in solver.solve_spd
+scikit-fem>=8
+meshio>=5
+Pillow             # imported directly by the CV / image modules
+pytest             # tests (docs/testing.md)
+# app
+pyvista
+trame>=3           # client_type="vue3"
+trame-vtk
+trame-vuetify
+trame-pyvista
+gmsh
+# cv
+transformers>=4.45
+torch>=2.0
+torchvision>=0.15  # required by SAM 2's image processor; without it SAM 1 is used
