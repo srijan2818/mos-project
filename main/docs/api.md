@@ -296,6 +296,16 @@ Fields: `params: dict = field(default_factory=dict)`, `mesh: tuple | None = None
 
 Parse model-description text into a Spec; raises SpecError with the line number.
 
+### `coarsen_mesh_text(text: str, factor: float, mesh=None) -> str`
+
+``text`` with its ``mesh`` line asking for elements ``factor`` (> 1) times larger.
+
+``box``: element counts divided by ``factor`` (at least 1). ``step`` / ``mask`` /
+``hull``: mesh size multiplied by ``factor``; without a size in the line, the current
+``mesh``'s mean edge length is the starting size. A ``file`` mesh cannot be re-meshed.
+The quadratic basis has ~ (1 / h)^3 DOFs, so ``factor = (n / n_target)^(1/3)``
+reaches about ``n_target``; Gmsh size bounds and minimum resolutions make it approximate.
+
 ### `make_mesh(spec: Spec)`
 
 Create the scikit-fem mesh a Spec asks for (generated box, or loaded from file).
@@ -360,6 +370,14 @@ Newton-Euler resultants.
 ### `solve_free_body_system(K, f, modes, equilibrium_scale=None)`
 
 Solve ``K u = f`` with rigid modes gauged, without fixing physical DOFs.
+
+### `count_dofs(mesh) -> int`
+
+Displacement DOFs of the default quadratic basis, from the mesh topology alone.
+
+P2 tetrahedra carry a node per vertex and per edge; Q2 hexahedra (27 nodes) also one per
+face and per cell; three components each. Pure NumPy, so it is cheap to call before the
+basis is built.
 
 ### `solve_spd(A, b, rtol: float=1e-10) -> np.ndarray`
 
@@ -599,6 +617,11 @@ Mesh helpers (imports scikit-fem lazily).
 ### `box_mesh(L, H, W, nx, ny, nz, kind='tet')`
 
 Beam along x: x in [0, L], y in [-H/2, H/2], z in [-W/2, W/2].
+
+### `mean_edge_length(mesh) -> float`
+
+Mean length of the cells' vertex-to-vertex edges (tets: 6 per cell, hexes: the
+12 box edges), the mesh's characteristic element size.
 
 ## `mos.core.gmsh_session`
 

@@ -561,3 +561,59 @@ def test_three_photo_flow_builds_a_hull_session_and_solves(env):
     s.mv3_img_1 = s.mv3_img_0
     s.fire("mv3_img_1")
     assert s.mv3_mask_ok == [True, False, True] and s.mv3_outline[1] == ""
+
+
+def _free_body_box(env, counts=(20, 4, 4)):
+    from mos.core.solver import count_dofs
+    from tests import fakemesh
+    s = env.state
+    _box_interactive(s)
+    s.supports_list = []                                  # free body: indefinite direct solve
+    s.box_nx, s.box_ny, s.box_nz = counts
+    return count_dofs(fakemesh.box(10.0, 1.0, 1.0, *counts))
+
+
+def test_free_body_over_the_limit_is_coarsened_not_refused(env):
+    from mos.core.solver import count_dofs
+    s, c = env.state, env.ctrl
+    n0 = _free_body_box(env)
+    env.app.FREE_BODY_MAX_DOFS = n0 // 3
+    c.run_solve()
+    assert "coarsened automatically" in s.status, s.status
+    n = count_dofs(env.solved_models[-1].mesh)
+    assert n <= n0 // 3 < n0
+    assert (s.box_nx, s.box_ny, s.box_nz) != (20, 4, 4)       # the builder's own fields changed
+    assert f"mesh     box L H W {s.box_nx} {s.box_ny} {s.box_nz}" in s.spec_text
+    c.run_solve()                                             # now within the limit: no note
+    assert "coarsened" not in s.status
+
+
+def test_supported_models_are_not_coarsened(env):
+    s, c = env.state, env.ctrl
+    n0 = _free_body_box(env)
+    s.supports_list = [{"face": "-x", "comps": "xyz"}]
+    env.app.FREE_BODY_MAX_DOFS = n0 // 3                      # only the free-body solve has the limit
+    c.run_solve()
+    assert "coarsened" not in s.status and s.box_nx == 20
+
+
+def test_script_mode_rewrites_the_mesh_line(env):
+    s, c = env.state, env.ctrl
+    s.config_mode = "script"
+    s.spec_text = ("mesh box 10 1 1 20 4 4   # beam\nmaterial E = 210e9, nu = 0.3, rho = 7850\n"
+                   "region tip facets x > 10 - 1e-6\nforce tip 0, -100, 0\n")
+    from mos.core.solver import count_dofs
+    from tests import fakemesh
+    env.app.FREE_BODY_MAX_DOFS = count_dofs(fakemesh.box(10, 1, 1, 20, 4, 4)) // 3
+    c.run_solve()
+    assert "coarsened automatically" in s.status, s.status
+    mesh_line = next(l for l in s.spec_text.splitlines() if l.startswith("mesh"))
+    assert mesh_line.startswith("mesh box 10 1 1 ") and "# beam" in mesh_line and " 20 4 4" not in mesh_line
+
+
+def test_coarsening_that_cannot_reach_the_limit_is_an_error(env):
+    s, c = env.state, env.ctrl
+    _free_body_box(env)
+    env.app.FREE_BODY_MAX_DOFS = 10                           # below even a 1 x 1 x 1 box
+    c.run_solve()
+    assert s.status_type == "error" and "stopped reducing" in s.status, s.status

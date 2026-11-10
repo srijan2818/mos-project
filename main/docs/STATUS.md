@@ -8,6 +8,28 @@ _Last updated: 2026-11-10_
 
 ## Done
 
+### Free-body auto-coarsening + opencv removed (2026-11-10, later)
+
+`pytest -q` **255 passed** (without opencv installed); `tools/smoke_app.py`, `gen_api_docs.py --check`
+and `compileall` pass.
+
+* **Fine free-body models are coarsened instead of refused.** Before, a model without supports
+  over 120k DOFs raised "free-body model has … DOFs". Now `run_solve` re-meshes, up to 4 times:
+  * The check is `solver.count_dofs`, a pure-NumPy P2/Q2 count, exact vs the basis for tets and
+    hexes.
+  * Interactive mode raises `cad_mesh_size` (STEP / photo / 3-photo) or lowers the box counts,
+    then rebuilds the spec. Script mode rewrites the `mesh` line (`spec.coarsen_mesh_text`, which
+    keeps the comment).
+  * The status reports N → M DOFs and the new size.
+  * A `mesh file` model, or coarsening that stops reducing, still errors.
+  * Real app, sphere STEP r = 50 mm at h = 3 mm, no supports: 149,754 → 40,437 DOFs
+    (h → 4.82 mm), solved, equilibrium error 1.5e-15.
+* **`opencv-contrib-python(-headless)` removed** from `pixi.toml`, the Dockerfile, `pixi.lock`
+  (8 entries, a leaf package; YAML still parses) and the FEM env. No module imports `cv2`.
+* Tests: `tests/test_coarsen.py` (10) and 4 app tests (interactive, supported-not-coarsened,
+  script mode, impossible case). Docs: `app.md` (Solve), `model-language.md` (error table),
+  `api.md`.
+
 ### 3-photo solid without markers + proportional-limit check (2026-11-10)
 
 Plan: `~/.claude/plans/look-up-fix-object-detection-multiview-3-snappy-lerdorf.md`.
@@ -273,6 +295,10 @@ Nothing is half-edited. Open state of the repository:
 * **Hull FE mesh: carve at ~2 voxels per element, marching cubes at step 1, smoothing 0.5 voxel.**
   Steps 3–4 left Gmsh with no tetrahedra. Smoothing 1 voxel: bar +11 % too soft vs +5 %.
   Cost: rounded edges can add small extra faces.
+* **Free-body coarsening target ≈ 36k DOFs (0.9 × `DIRECT_SOLVE_MAX_DOFS`), not just under the
+  120k limit.** Measured indefinite direct solve on a sphere: 21k DOFs 24 s / 0.9 GB, 45k 98 s /
+  2.4 GB, ~100k still running after 10 min at 7 GB (~n^1.9). The MMD_AT_PLUS_A ordering did not
+  help (27 vs 22 s). Models between 40k and 120k are still solved as given (slow).
 * **Limit markers are screen-space discs drawn by `update_scene`**, not in `S.analysis_actors`: the
   probe overlay removes those on every redraw (they vanished in the first browser check).
 * **App CSS/JS are served files** (`mos/app/static/`): Vue drops `<style>` inside templates.
@@ -321,9 +347,9 @@ Nothing is half-edited. Open state of the repository:
 2. **Flaky test:** `tests/test_cv_detector.py::test_cv_noisy_harsh_lighting_bracket` uses unseeded
    `np.random` noise. It failed once in a full run and passed alone and with the CV files. Seed it
    (`np.random.default_rng(0)`) after checking the seeded case still passes.
-3. **Dependency to drop (ask first):** `opencv-contrib-python-headless` in `pixi.toml` was only
-   needed by the deleted `marker.py`. No module imports `cv2` now. It is also installed in the FEM
-   env.
+3. **Faster free-body solve (optional):** the saddle-point LU is the bottleneck (~n^1.9). A
+   projected CG on K (rigid modes removed, consistent right-hand side) would scale like the
+   supported path. With it, the 40k coarsening target could rise. Measure on the sphere first.
 4. Mask meshes exceed the 12k-tet budget (95k DOFs, 138 s solve for a 7 cm cube); check the
    estimate in `image_to_mesh.mesh_from_mask`. Hull meshes at the default size are ~13–18k tets.
 5. Validate the single-photo CV path on real workshop photos. The "trusted classical mask"
@@ -347,4 +373,7 @@ Nothing is half-edited. Open state of the repository:
     `executablePath`. Unpack libnss3 / libnspr4 / libasound2t64 with `apt-get download` +
     `dpkg -x` into the scratchpad and set `LD_LIBRARY_PATH`. The Playwright MCP plugin fails: it
     expects Google Chrome at `/opt/google/chrome`. The trame state is shared by all clients, so
-    restart the server between scripted runs.
+    restart the server between scripted runs. Port 8080 may be your own running app: test
+    servers used 8091. `pkill -f "mos.app --server"` inside a compound command matches its own
+    shell, so run it alone. `pixi.lock` was edited by hand (opencv removed); `pixi install` will
+    re-validate it.

@@ -275,6 +275,29 @@ def solve_free_body_system(K, f, modes, equilibrium_scale=None):
     return u
 
 
+def _unique_rows(a):
+    """Number of distinct rows of an integer array after sorting each row."""
+    return len(np.unique(np.sort(a, axis=1), axis=0))
+
+
+def count_dofs(mesh) -> int:
+    """Displacement DOFs of the default quadratic basis, from the mesh topology alone.
+
+    P2 tetrahedra carry a node per vertex and per edge; Q2 hexahedra (27 nodes) also one per
+    face and per cell; three components each. Pure NumPy, so it is cheap to call before the
+    basis is built.
+    """
+    t = np.asarray(mesh.t)
+    nv = int(np.asarray(mesh.p).shape[1])
+    if t.shape[0] == 4:
+        pairs = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
+        edges = _unique_rows(np.concatenate([t[[a, b]].T for a, b in pairs]))
+        return 3 * (nv + edges)
+    if t.shape[0] == 8:          # hex meshes always come from scikit-fem, which knows its faces
+        return 3 * (nv + mesh.edges.shape[1] + mesh.facets.shape[1] + t.shape[1])
+    raise ValueError(f"no DOF count for cells with {t.shape[0]} vertices")
+
+
 # ----------------------------------------------------------------- linear solves
 DIRECT_SOLVE_MAX_DOFS = 40_000
 """Above this many unknowns a sparse LU of 3D elasticity takes minutes and several GB (fill

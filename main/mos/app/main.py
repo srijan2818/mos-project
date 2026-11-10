@@ -60,9 +60,10 @@ from mos.core.multiview import (
     nerfstudio_commands, prepare_capture_session, run_colmap_sparse_reconstruction,
     run_nerfstudio_preprocess, tool_availability,
 )
-from mos.core.solver import CachedLinearSolver, solve_case
+from mos.core.solver import (DIRECT_SOLVE_MAX_DOFS, FREE_BODY_MAX_DOFS, CachedLinearSolver,
+                             count_dofs, solve_case)
 from mos.core.regions import cad_boundary_name_for_side
-from mos.core.spec import build, parse_spec
+from mos.core.spec import build, coarsen_mesh_text, parse_spec
 from mos.templates import TEMPLATES
 from mos.lab import evaluate_stress as lab_evaluate_stress, evaluate_traction as lab_evaluate_traction, model_summary as lab_model_summary, tensor_matrix_html as lab_tensor_matrix_html
 from mos.learning import (
@@ -1245,6 +1246,45 @@ def main(argv=None):
         _rebuild_spec_from_interactive(mesh_ref_override=mesh)
         return str(state.spec_text)
 
+    def _geometry_text(text):
+        """The geometry-defining lines (param / mesh / material) of a spec text."""
+        keep = {"param", "mesh", "material"}
+        return "\n".join(line for line in text.splitlines()
+                         if not line.strip() or line.strip().startswith("#")
+                         or line.strip().split(None, 1)[0].lower() in keep) + "\n"
+
+    FREE_BODY_COARSEN_TRIES = 4
+
+    def _coarsen_for_free_body(mesh, n_dofs, spec_text):
+        """UI thread: ask for a coarser mesh so a free-body model fits the direct solver.
+
+        The target is the comfortable direct-solve size (``DIRECT_SOLVE_MAX_DOFS``), not just
+        under the hard limit: the indefinite free-body solve grows ~ n^1.9 (sphere: 21k DOFs
+        24 s, 45k 98 s, ~100k still running after 10 min at 7 GB). DOFs ~ h^-3 for the
+        quadratic basis, so element size grows by (n / 0.9 target)^(1/3). Interactive mode
+        changes the builder's own fields (mesh size / box counts) so the rebuilt spec stays in
+        sync; script mode rewrites the mesh line. Returns (spec_text, geometry_text or None, note).
+        """
+        target = 0.9 * min(DIRECT_SOLVE_MAX_DOFS, FREE_BODY_MAX_DOFS)
+        factor = (n_dofs / target) ** (1.0 / 3.0)
+        if state.config_mode != "interactive":
+            text = coarsen_mesh_text(spec_text, factor, mesh)
+            state.spec_text = text
+            return text, None, f"mesh line now: {next(l for l in text.splitlines() if l.strip().lower().startswith('mesh'))}"
+        if state.geom_mode == "box":
+            old = (int(state.box_nx), int(state.box_ny), int(state.box_nz))
+            new = [max(1, int(n / factor)) for n in old]
+            state.box_nx, state.box_ny, state.box_nz = new
+            note = f"elements {old[0]}×{old[1]}×{old[2]} → {new[0]}×{new[1]}×{new[2]}"
+        else:
+            from mos.core.meshes import mean_edge_length
+            old = float(state.cad_mesh_size) if state.cad_mesh_size else mean_edge_length(mesh)
+            state.cad_mesh_size = float(f"{old * factor:.3g}")
+            note = f"mesh size {old:.3g} → {state.cad_mesh_size:.3g} m"
+        _rebuild_spec_from_interactive()
+        text = str(state.spec_text)
+        return text, (_geometry_text(text) if state.geom_mode in ("step", "cv") else None), note
+
     def run_solve(on_done=None):
         """Parse the active specification, solve the finite element model, and update views.
 
@@ -1267,11 +1307,7 @@ def main(argv=None):
                 if state.geom_mode in ("step", "cv"):
                     # The new CAD/mask mesh decides which named faces exist, so supports and
                     # loads are generated after meshing (on the UI thread, see the worker).
-                    geometry_directives = {"param", "mesh", "material"}
-                    geometry_text = "\n".join(
-                        line for line in state.spec_text.splitlines()
-                        if not line.strip() or line.strip().startswith("#")
-                        or line.strip().split(None, 1)[0].lower() in geometry_directives) + "\n"
+                    geometry_text = _geometry_text(state.spec_text)
             spec_text = str(state.spec_text)
         except Exception as e:
             _solve_failed(e, on_done)
@@ -1283,18 +1319,42 @@ def main(argv=None):
                 ui(lambda: state.update({"solve_running": False}))
                 return
             try:
-                text, mesh = spec_text, None
-                if geometry_text is not None:
-                    mesh = build(parse_spec(geometry_text))[0].mesh          # Gmsh: slow
-                    text = _ui_wait(ui, lambda: _cad_spec_for_mesh(mesh))
-                if S.cancel_event.is_set():
-                    ui(lambda: state.update({"solve_running": False}))
-                    return
-                spec = parse_spec(text)
-                model, case = build(spec, mesh=mesh) if mesh is not None else build(spec)
-                if S.cancel_event.is_set():
-                    ui(lambda: state.update({"solve_running": False}))
-                    return
+                cur_text, cur_geometry, coarsened, last_n = spec_text, geometry_text, [], None
+                for attempt in range(FREE_BODY_COARSEN_TRIES + 1):
+                    text, mesh = cur_text, None
+                    if cur_geometry is not None:
+                        mesh = build(parse_spec(cur_geometry))[0].mesh       # Gmsh: slow
+                        text = _ui_wait(ui, lambda: _cad_spec_for_mesh(mesh))
+                    if S.cancel_event.is_set():
+                        ui(lambda: state.update({"solve_running": False}))
+                        return
+                    spec = parse_spec(text)
+                    model, case = build(spec, mesh=mesh) if mesh is not None else build(spec)
+                    if S.cancel_event.is_set():
+                        ui(lambda: state.update({"solve_running": False}))
+                        return
+                    n = count_dofs(model.mesh)
+                    if model.bcs or n <= FREE_BODY_MAX_DOFS:
+                        break
+                    # A free body needs the indefinite direct solve: coarsen instead of failing.
+                    if attempt == FREE_BODY_COARSEN_TRIES or (last_n is not None and n > 0.95 * last_n):
+                        raise ValueError(
+                            f"free-body model has {n:,} DOFs (limit {FREE_BODY_MAX_DOFS:,}) and "
+                            f"automatic coarsening stopped reducing it ({len(coarsened)} attempt(s)); "
+                            "use a coarser mesh or add supports")
+                    m_now, n_now, t_now = model.mesh, n, cur_text
+                    cur_text, cur_geometry, note = _ui_wait(
+                        ui, lambda: _coarsen_for_free_body(m_now, n_now, t_now))
+                    coarsened.append((n, note))
+                    last_n = n
+                if coarsened:
+                    coarse_note = (f"Free-body mesh coarsened automatically: {coarsened[0][0]:,} → {n:,} "
+                                   f"DOFs (the free-body direct solve allows {FREE_BODY_MAX_DOFS:,}; "
+                                   f"~{DIRECT_SOLVE_MAX_DOFS // 1000}k solves in about a minute); "
+                                   + "; ".join(note for _, note in coarsened) + ". ")
+                    log.info(coarse_note)
+                else:
+                    coarse_note = ""
                 cached, res, live_status = None, None, None
                 try:
                     if model.bcs:
@@ -1325,7 +1385,7 @@ def main(argv=None):
                 ui(lambda: state.update({"solve_running": False}))
                 return
             ui(lambda: _apply_solution(spec, text, model, case, res, cached, live_status,
-                                       dropped, on_done))
+                                       dropped, on_done, coarse_note))
 
         _spawn(_worker, "mos-solve")
 
@@ -1385,7 +1445,8 @@ def main(argv=None):
         return (f"Proportional limit exceeded at {n} node(s): linear FEM results are not valid "
                 "at this load." if n else "")
 
-    def _apply_solution(spec, text, model, case, res, cached, live_status, dropped, on_done):
+    def _apply_solution(spec, text, model, case, res, cached, live_status, dropped, on_done,
+                        coarse_note=""):
         """UI thread: install a finished solve and refresh every view."""
         try:
             S.cached_solver = cached
@@ -1451,6 +1512,9 @@ def main(argv=None):
             if dropped:
                 state.status = (f"Removed {dropped} support(s)/load(s) on the previous model's faces; "
                                 f"re-select them. {state.status}")
+                state.status_type = "warning"
+            if coarse_note:
+                state.status = coarse_note + state.status
                 state.status_type = "warning"
             state.cv3d_preview_active = False   # the new result replaces any preview
 

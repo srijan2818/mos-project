@@ -46,7 +46,13 @@ opens the Lab as a dock over the right side of the 3D view; **Analysis workspace
 2. Press **Solve**. The status panel shows the cell and DOF counts, the maximum displacement and
    von Mises stress, the total reaction, and the equilibrium error. The status turns green when the
    equilibrium error is below 1e-6 and amber otherwise; errors in the model text are shown in red
-   with their line number.
+   with their line number. A model **without supports** (free body) is solved with an indefinite
+   direct solver limited to 120,000 DOFs. Above that, Solve coarsens the mesh automatically
+   instead of failing: it raises the mesh size (STEP, photo and 3-photo meshes) or lowers the
+   box element counts, aiming at ~36,000 DOFs. The direct solve grows ~n^1.9: on a sphere, 21k
+   DOFs took 24 s and 45k took 98 s, while ~100k was still running after 10 min. The status
+   reports the change, and the builder fields (or, in script mode, the `mesh` line) show the new
+   size. A `mesh file` model cannot be re-meshed and still reports the limit.
 3. Explore the **Results** controls, or use **Loads & Supports** to apply moments and forces on
    faces and points.
 4. Switch to **Learning Lab** for point-stress experiments, principal-plane visualisation, Mohr's

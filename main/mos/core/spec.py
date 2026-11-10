@@ -22,6 +22,7 @@ One directive per line, '#' starts a comment. Units are whatever you use consist
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 from dataclasses import dataclass, field
@@ -348,6 +349,45 @@ def parse_spec(text: str) -> Spec:
 
 
 # ------------------------------------------------------------------ building
+def coarsen_mesh_text(text: str, factor: float, mesh=None) -> str:
+    """``text`` with its ``mesh`` line asking for elements ``factor`` (> 1) times larger.
+
+    ``box``: element counts divided by ``factor`` (at least 1). ``step`` / ``mask`` /
+    ``hull``: mesh size multiplied by ``factor``; without a size in the line, the current
+    ``mesh``'s mean edge length is the starting size. A ``file`` mesh cannot be re-meshed.
+    The quadratic basis has ~ (1 / h)^3 DOFs, so ``factor = (n / n_target)^(1/3)``
+    reaches about ``n_target``; Gmsh size bounds and minimum resolutions make it approximate.
+    """
+    if not factor > 1.0:
+        raise ValueError("coarsening factor must be > 1")
+    m = parse_spec(text).mesh
+    kind = m[0]
+    if kind == "box":
+        _, L, H, W, nx, ny, nz, elem = m
+        counts = [max(1, int(n / factor)) for n in (nx, ny, nz)]
+        line = f"mesh box {L:.12g} {H:.12g} {W:.12g} {counts[0]} {counts[1]} {counts[2]} {elem}"
+    elif kind in ("step", "hull", "mask"):
+        ms = m[-1]
+        if ms is None:
+            if mesh is None:
+                raise ValueError("the mesh line has no size: pass the current mesh")
+            from .meshes import mean_edge_length
+            ms = mean_edge_length(mesh)
+        h = f"{ms * factor:.4g}"
+        line = (f"mesh mask {json.dumps(m[1])} {m[2]:.12g} {m[3]:.12g} {h}" if kind == "mask"
+                else f"mesh {kind} {json.dumps(m[1])} {h}")
+    else:
+        raise SpecError("a 'mesh file' mesh cannot be coarsened automatically; remesh the file")
+    lines = text.splitlines()
+    for i, ln in enumerate(lines):
+        body = ln.split("#", 1)[0].strip()
+        if body.split(None, 1)[:1] and body.split(None, 1)[0].lower() == "mesh":
+            comment = ln.split("#", 1)[1] if "#" in ln else None
+            lines[i] = line + (f"   #{comment}" if comment is not None else "")
+            return "\n".join(lines) + ("\n" if text.endswith("\n") else "")
+    raise SpecError("no 'mesh' line")
+
+
 def make_mesh(spec: Spec):
     """Create the scikit-fem mesh a Spec asks for (generated box, or loaded from file)."""
     if spec.mesh[0] == "box":

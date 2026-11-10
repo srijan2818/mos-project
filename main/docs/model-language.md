@@ -265,5 +265,6 @@ Every error names the line. Common ones:
 | `not finite` | a constant that is `inf` or `nan` (division by zero, `log(-1)`, ...) |
 | `supports do not remove all six rigid-body modes` | the body has some but insufficient supports; add sufficient constraints or remove all supports to use the free-body frame |
 | `positive material density is required` | an unbalanced free-body load needs mass/inertia; set a positive `rho` |
+| `free-body model has N DOFs (limit 120,000 ...)` | a model without supports is too fine for the indefinite direct solve: use a larger mesh size or add supports (the app coarsens automatically, see [app.md](app.md)) |
 | `effective free-body loads are not in rigid-body equilibrium` | inertia and external resultants did not balance; check the mesh, loads, and solver |
 | `load vector contains NaN or inf` | a load expression blew up at some point (`1/x` at `x = 0`, ...) |
