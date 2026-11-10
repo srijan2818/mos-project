@@ -60,7 +60,7 @@ from mos.core.multiview import (
     nerfstudio_commands, prepare_capture_session, run_colmap_sparse_reconstruction,
     run_nerfstudio_preprocess, tool_availability,
 )
-from mos.core.solver import (DIRECT_SOLVE_MAX_DOFS, FREE_BODY_MAX_DOFS, CachedLinearSolver,
+from mos.core.solver import (FREE_BODY_MAX_DOFS, CachedLinearSolver,
                              count_dofs, solve_case)
 from mos.core.regions import cad_boundary_name_for_side
 from mos.core.spec import build, coarsen_mesh_text, parse_spec
@@ -574,13 +574,13 @@ def main(argv=None):
 
                 if state.load_mode == "force":
                     arr_prev = viz.create_arrow_glyph(
-                        c, _parse_vec3(state.force_vec), diag, reference_magnitude=1e5
+                        c, _parse_vec3(state.force_vec), diag, reference_magnitude=viz.LOAD_GLYPH_REFERENCE
                     )
                     if arr_prev is not None:
                         pl.add_mesh(arr_prev, color="#22c55e", pickable=False)
                 elif state.load_mode == "moment":
                     m_vec = _get_moment_vector(state, bounds, mesh_ref)
-                    arr_prev = viz.create_moment_glyph(c, m_vec, diag, reference_magnitude=1e5)
+                    arr_prev = viz.create_moment_glyph(c, m_vec, diag, reference_magnitude=viz.LOAD_GLYPH_REFERENCE)
                     if arr_prev is not None:
                         pl.add_mesh(arr_prev, color="#c084fc", pickable=False)
                 elif state.load_mode == "pressure":
@@ -908,7 +908,7 @@ def main(argv=None):
                         if not face.startswith("cad_face_"):
                             lines.append(f"region   {reg} facets {_face_condition(face, bounds)}")
                     if mode == "force":
-                        lines.append(f"force    {reg} {ld.get('vec', '0, -1e5, 0')}")
+                        lines.append(f"force    {reg} {ld.get('vec', '0, -1e2, 0')}")
                     elif mode == "pressure":
                         lines.append(f"pressure {reg} {ld.get('val', '1e6')}")
                     elif mode == "moment":
@@ -921,7 +921,7 @@ def main(argv=None):
                     reg = f"pt_ld_{i}"
                     lines.append(f"region   {reg} nearest {px:.4g}, {py:.4g}, {pz:.4g}")
                     if mode == "force":
-                        lines.append(f"force    {reg} {ld.get('vec', '0, -1e5, 0')}")
+                        lines.append(f"force    {reg} {ld.get('vec', '0, -1e2, 0')}")
                     elif mode == "moment":
                         if state.geom_mode == "box":
                             freg = f"face_ld_{i}_{_safe_region_name(face, 'face')}"
@@ -1253,20 +1253,29 @@ def main(argv=None):
                          if not line.strip() or line.strip().startswith("#")
                          or line.strip().split(None, 1)[0].lower() in keep) + "\n"
 
-    FREE_BODY_COARSEN_TRIES = 4
+    COARSEN_TRIES = 4
 
-    def _coarsen_for_free_body(mesh, n_dofs, spec_text):
-        """UI thread: ask for a coarser mesh so a free-body model fits the direct solver.
+    def _max_dofs() -> int:
+        """The user's DOF limit (``state.max_dofs``) as a positive integer; bad input raises."""
+        raw = str(state.max_dofs).strip().replace(",", "").replace("_", "")
+        try:
+            value = float(raw)
+        except ValueError:
+            raise ValueError(f"Max DOFs must be a number, got {state.max_dofs!r}") from None
+        if not np.isfinite(value) or value < 1:
+            raise ValueError(f"Max DOFs must be a positive number, got {state.max_dofs!r}")
+        return int(value)
 
-        The target is the comfortable direct-solve size (``DIRECT_SOLVE_MAX_DOFS``), not just
-        under the hard limit: the indefinite free-body solve grows ~ n^1.9 (sphere: 21k DOFs
-        24 s, 45k 98 s, ~100k still running after 10 min at 7 GB). DOFs ~ h^-3 for the
-        quadratic basis, so element size grows by (n / 0.9 target)^(1/3). Interactive mode
-        changes the builder's own fields (mesh size / box counts) so the rebuilt spec stays in
-        sync; script mode rewrites the mesh line. Returns (spec_text, geometry_text or None, note).
+    def _coarsen_to_limit(mesh, n_dofs, spec_text, limit):
+        """UI thread: ask for a coarser mesh so the model fits under ``limit`` DOFs.
+
+        The target is 0.9 x ``limit``, so a re-mesh that lands a little above the estimate still
+        fits. DOFs ~ h^-3 for the quadratic basis, so element size grows by
+        (n / target)^(1/3). Interactive mode changes the builder's own fields (mesh size / box
+        counts) so the rebuilt spec stays in sync; script mode rewrites the mesh line.
+        Returns (spec_text, geometry_text or None, note).
         """
-        target = 0.9 * min(DIRECT_SOLVE_MAX_DOFS, FREE_BODY_MAX_DOFS)
-        factor = (n_dofs / target) ** (1.0 / 3.0)
+        factor = (n_dofs / (0.9 * limit)) ** (1.0 / 3.0)
         if state.config_mode != "interactive":
             text = coarsen_mesh_text(spec_text, factor, mesh)
             state.spec_text = text
@@ -1309,6 +1318,7 @@ def main(argv=None):
                     # loads are generated after meshing (on the UI thread, see the worker).
                     geometry_text = _geometry_text(state.spec_text)
             spec_text = str(state.spec_text)
+            max_dofs = _max_dofs()
         except Exception as e:
             _solve_failed(e, on_done)
             return
@@ -1320,7 +1330,7 @@ def main(argv=None):
                 return
             try:
                 cur_text, cur_geometry, coarsened, last_n = spec_text, geometry_text, [], None
-                for attempt in range(FREE_BODY_COARSEN_TRIES + 1):
+                for attempt in range(COARSEN_TRIES + 1):
                     text, mesh = cur_text, None
                     if cur_geometry is not None:
                         mesh = build(parse_spec(cur_geometry))[0].mesh       # Gmsh: slow
@@ -1334,23 +1344,25 @@ def main(argv=None):
                         ui(lambda: state.update({"solve_running": False}))
                         return
                     n = count_dofs(model.mesh)
-                    if model.bcs or n <= FREE_BODY_MAX_DOFS:
+                    # The user's limit; a free body also has the indefinite direct solve's RAM cap.
+                    limit = max_dofs if model.bcs else min(max_dofs, FREE_BODY_MAX_DOFS)
+                    if n <= limit:
                         break
-                    # A free body needs the indefinite direct solve: coarsen instead of failing.
-                    if attempt == FREE_BODY_COARSEN_TRIES or (last_n is not None and n > 0.95 * last_n):
+                    if attempt == COARSEN_TRIES or (last_n is not None and n > 0.95 * last_n):
                         raise ValueError(
-                            f"free-body model has {n:,} DOFs (limit {FREE_BODY_MAX_DOFS:,}) and "
-                            f"automatic coarsening stopped reducing it ({len(coarsened)} attempt(s)); "
-                            "use a coarser mesh or add supports")
+                            f"model has {n:,} DOFs (limit {limit:,}) and automatic coarsening "
+                            f"stopped reducing it ({len(coarsened)} attempt(s)); use a coarser "
+                            "mesh or raise Max DOFs")
                     m_now, n_now, t_now = model.mesh, n, cur_text
                     cur_text, cur_geometry, note = _ui_wait(
-                        ui, lambda: _coarsen_for_free_body(m_now, n_now, t_now))
+                        ui, lambda: _coarsen_to_limit(m_now, n_now, t_now, limit))
                     coarsened.append((n, note))
                     last_n = n
                 if coarsened:
-                    coarse_note = (f"Free-body mesh coarsened automatically: {coarsened[0][0]:,} → {n:,} "
-                                   f"DOFs (the free-body direct solve allows {FREE_BODY_MAX_DOFS:,}; "
-                                   f"~{DIRECT_SOLVE_MAX_DOFS // 1000}k solves in about a minute); "
+                    cap = ("" if model.bcs or max_dofs <= FREE_BODY_MAX_DOFS else
+                           f"; free bodies are capped at {FREE_BODY_MAX_DOFS:,}")
+                    coarse_note = (f"Mesh coarsened automatically: {coarsened[0][0]:,} → {n:,} DOFs "
+                                   f"(Max DOFs {limit:,}{cap}); "
                                    + "; ".join(note for _, note in coarsened) + ". ")
                     log.info(coarse_note)
                 else:
@@ -2498,7 +2510,7 @@ def main(argv=None):
 
     # Force direction presets
     def _set_force_preset(key):
-        mag = state.force_mag or "1e5"
+        mag = state.force_mag or "1e2"
         presets = {
             "down": f"0, -{mag}, 0", "up": f"0, {mag}, 0",
             "tension": f"{mag}, 0, 0", "compression": f"-{mag}, 0, 0",
@@ -2855,6 +2867,7 @@ def main(argv=None):
         "cv_friendly_name": "",
         "cv_confidence_pct": None,
         "solve_running": False,
+        "max_dofs": "40000",
         "cv_points": [], "cv_candidate": None, "cv_n_candidates": 0,
         "cv_mask_accepted": False, "cv_click_mode": "add",
         "mv3_img_0": "", "mv3_img_1": "", "mv3_img_2": "",
@@ -2966,14 +2979,13 @@ def main(argv=None):
         "mat_spl": "250", "mat_splc": "", "mat_brittle": False,
         "limit_dialog": False, "limit_text": "", "limit_count": 0,
         # Supports & Loads
-        "supports_list": [{"face": "-x", "comps": "xyz"}],
-        "loads_list": [{"mode": "force", "target": "face", "face": "+x",
-                        "vec": "0, -1e5, 0", "val": "0", "pt": [0, 0, 0]}],
+        "supports_list": [],
+        "loads_list": [],
         "live_load_items": [],
         "live_load_selection": "",
         "editing_load_index": -1,
         "live_load_mode": "force",
-        "live_load_x": 0.0, "live_load_y": -1e5, "live_load_z": 0.0,
+        "live_load_x": 0.0, "live_load_y": -1e2, "live_load_z": 0.0,
         "live_pressure": 1e6,
         "live_load_multiplier": 1.0,
         "live_load_value": "",
@@ -3024,8 +3036,8 @@ def main(argv=None):
         "origin_is_centroid": True,
         "click_status": "Click anywhere on 3D mesh surface to pick target point",
         # Force
-        "force_mag": "1e5",
-        "force_vec": "0, -1e5, 0",
+        "force_mag": "1e2",
+        "force_vec": "0, -1e2, 0",
         # Moment
         "moment_axis_type": "normal",
         "moment_axis_types": [
@@ -3036,11 +3048,11 @@ def main(argv=None):
             {"title": "Custom Axis …", "value": "custom"},
         ],
         "custom_axis": "1, 0, 0",
-        "moment_mag": "1e5",
+        "moment_mag": "1e2",
         # Pressure
         "pressure_val": "1e6",
         # Preview
-        "load_preview_snippet": "force face_pos_x 0, -1e5, 0",
+        "load_preview_snippet": "force face_pos_x 0, -1e2, 0",
         "model_bounds": [0, 10, -0.5, 0.5, -0.5, 0.5],
         # Learning Lab — an idealised point-stress experiment, separate from FEM results.
         "lab_case": "Combined 3D stress",
@@ -3075,6 +3087,8 @@ def main(argv=None):
     if args.spec:
         state.spec_text = Path(args.spec).read_text()
         state.config_mode = "script"  # otherwise the first Solve rebuilds it from the builder
+    else:
+        _rebuild_spec_from_interactive()  # start with the bare box: no supports, no loads
 
     # ------------------------------------------------------------------ reactive watchers
     @state.change("template")
@@ -3925,6 +3939,15 @@ def main(argv=None):
                                 variant="outlined", hide_details=True, no_resize=True,
                                 style="font-family: monospace; font-size: 11px;",
                             )
+
+                        # DOF limit (both modes): larger meshes are coarsened before solving
+                        v3.VTextField(
+                            v_model=("max_dofs",), label="Max DOFs (coarser mesh above this)",
+                            hint=f"Larger meshes are re-meshed coarser before solving. ~40,000 "
+                                 f"solves in about a minute; free bodies are capped at "
+                                 f"{FREE_BODY_MAX_DOFS:,}.",
+                            persistent_hint=True, density="compact", classes="mt-3",
+                        )
 
                         # Solve Button
                         v3.VBtn(

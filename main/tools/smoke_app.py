@@ -237,6 +237,11 @@ def main():
     state.fire("lab_tool_mode")
     assert state.lab_quick_primary_value == "28.29 MPa"
 
+    # The app starts with no supports or loads; set up a supported cantilever explicitly.
+    assert state.supports_list == [] and state.loads_list == []
+    state.supports_list = [{"face": "-x", "comps": "xyz"}]
+    state.loads_list = [{"mode": "force", "target": "face", "face": "+x",
+                         "vec": "0, -1e2, 0", "val": "0", "pt": [0, 0, 0]}]
     ctrl.run_solve()
     assert state.theme == "dark", "theme should default to dark"
     assert state.field_items and abs(float(state.scale) - 1.0) < 1e-12 and state.scale_max > 0
@@ -295,7 +300,7 @@ def main():
     assert len(solved_cases) == solve_count_before_live_edit
     assert np.allclose(
         [float(v) for v in state.loads_list[0]["vec"].split(",")],
-        [0.0, -120000.0, 0.0],
+        [0.0, -120.0, 0.0],
     )
     assert "Live response" in state.status
 

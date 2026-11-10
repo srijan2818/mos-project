@@ -8,6 +8,78 @@ _Last updated: 2026-11-10_
 
 ## Done
 
+### Two reports replace the old one + measurements for them (2026-11-10, late night)
+
+* Old `report/report.tex|pdf` and its 4 figures deleted (your request). New, in `report/`
+  (see `report/README.md`):
+  * `mos_concepts.pdf`: 5 pages, MoS concepts + verification.
+  * `project_report.pdf`: 21 pages, whole project.
+  * Built with tectonic. `figures/`, `data/` (raw JSON), `photos/` (Wikimedia Commons, licences in
+    the appendix) and `scripts/` (bench, kirsch, cv_*, make_figures, `browser/` Playwright scripts).
+* **No code changed.** `pytest -q`: **258 passed** (220 s, CPU only: `nvidia-smi` said "GPU access
+  blocked by the operating system", so torch had no CUDA this session).
+* New measurements (`report/scripts/bench.py`, `kirsch.py`):
+  * P2 tip deflection −0.03 % vs Euler–Bernoulli on 40×4×4; P1 tets −78/−49/−21 %.
+  * Moment −0.53 %, self-weight −0.03 %, axial −0.33 %, torsion −0.27 %.
+  * Free body a = F/m and α = M/I to round-off.
+  * **Plate with hole (quarter, d/W = 0.2):** averaged nodal Kt 2.84/2.91/2.92 at h = 6/4/3 mm,
+    i.e. −7 % vs Heywood 3.14; the unaveraged element-vertex value is 3.147 (+0.2 %).
+  * **Q2 hex 40×4×4 (19.7k DOFs) took 211 s vs 8 s for P2 tets.** Cause not investigated.
+* Vision pipeline on 6 web photos, 11 runs (`report/data/cv_log*.json`):
+  * The guess picked the intended part in 4/6 photos; clicks fixed the rest.
+  * SAM fills small screw holes; negative clicks recover them.
+  * The classical fast path accepted a white-background chrome spanner but lost its highlights,
+    giving a hollow shank.
+  * The classifier labelled only 1/6 photos correctly.
+* Spanner photo → `mesh mask` → 200 N: shank edge stress within +1.5…+6.5 % of 6M/(tb²).
+* Screenshots: Chrome is **not** installed (needs sudo). The `.deb` was downloaded to the session
+  scratchpad, and you were asked to run `sudo apt install` on it. The Next-12 fallback
+  (playwright-core + headless shell) was used instead. The trame server exits by itself a while
+  after the last client disconnects (exit code 0).
+
+### User-chosen DOF limit for every model (2026-11-10, night)
+
+* **Max DOFs** field above the Solve button (both builder and script mode), `state.max_dofs`,
+  default **40,000**; `40,000` / `4e4` accepted, bad or < 1 is a red error.
+* Applies to **all** models (your call): above it `run_solve` coarsens with the existing loop
+  (`_coarsen_to_limit`, was `_coarsen_for_free_body`) to 0.9 × limit. Free bodies are still capped
+  at `FREE_BODY_MAX_DOFS` (120k, RAM) whatever the field says; the status says so.
+* Tests: `test_app_handlers.py` free-body tests use `max_dofs`; "supported models are not
+  coarsened" became "coarsened to the user limit"; new: under-limit not coarsened, free-body cap
+  above a higher user limit, bad input. `test_app_handlers` + `test_coarsen` + docs tests: 59
+  passed; smoke test OK. Full suite not run.
+* Real app (headless Chromium): 60×6×6 box with a support, limit 5,000 → 61,347 → 3,825 DOFs
+  (25×2×2). Box counts are truncated, so small counts undershoot the target (6 → 2).
+* Docs: `app.md` (Workflow step 2, Controls table).
+
+### App starts empty; default load 1e2 (2026-11-10, night)
+
+* The builder starts with **no supports and no loads** (was: `-x` clamped + 1e5 N tip force). At
+  startup the script editor is filled from the builder (a bare box) instead of the first template;
+  `--spec` still wins. With nothing added, Solve treats the box as a free body.
+* Default force / moment magnitude **1e2** (was 1e5): `force_mag`, `force_vec`, `moment_mag`, the
+  live-load Y, the preview snippet, the preset fallback and the spec fallback.
+* New `viz.LOAD_GLYPH_REFERENCE = 1e2` (was a literal 1e5) for force/moment arrows, so the default
+  load draws at nominal length. Body-force (gravity) arrows keep 1e5.
+* `tools/smoke_app.py` now adds the support + load itself before its first solve. Checked:
+  `smoke_app.py`, `pytest tests/test_app_handlers.py tests/test_viz.py tests/test_docs.py
+  tests/test_docstrings.py` (50 passed), and the real app in headless Chromium. The full suite
+  was not run.
+* (Superseded: the report was rewritten in the next session, see "Two reports" above.)
+
+### Project report in LaTeX (2026-11-10, evening)
+
+* `report/report.tex` → `report/report.pdf` (6 pages), built with
+  `~/miniforge3/envs/tex/bin/tectonic report.tex` from `report/`. No code was changed and the
+  tests were not re-run.
+* `report/figures/`: four screenshots of the real app (server on port 8091, headless Chromium via
+  `playwright-core`, see Next 12): default cantilever results, Learning Lab dock,
+  proportional-limit dialog (σ_pl = 1 MPa), bracket sample photo → outline mesh → solve
+  (10,815 tets, 50,919 DOFs, residual 7.2e-12).
+* The numbers in the report come from the docs and this file, except the Euler–Bernoulli tip
+  deflection of the default beam (P L³ / 3 E I = 1.905 mm vs 1.904 mm in the app), computed for
+  the report.
+
 ### Free-body auto-coarsening + opencv removed (2026-11-10, later)
 
 `pytest -q` **255 passed** (without opencv installed); `tools/smoke_app.py`, `gen_api_docs.py --check`
@@ -295,6 +367,9 @@ Nothing is half-edited. Open state of the repository:
 * **Hull FE mesh: carve at ~2 voxels per element, marching cubes at step 1, smoothing 0.5 voxel.**
   Steps 3–4 left Gmsh with no tetrahedra. Smoothing 1 voxel: bar +11 % too soft vs +5 %.
   Cost: rounded edges can add small extra faces.
+* **DOF limit is the user's (`Max DOFs`, default 40k), for every model** (2026-11-10, your
+  call); coarsening aims at 0.9 × limit, free bodies capped at 120k. The default keeps the old
+  ~36k free-body target. Background for the earlier fixed target:
 * **Free-body coarsening target ≈ 36k DOFs (0.9 × `DIRECT_SOLVE_MAX_DOFS`), not just under the
   120k limit.** Measured indefinite direct solve on a sphere: 21k DOFs 24 s / 0.9 GB, 45k 98 s /
   2.4 GB, ~100k still running after 10 min at 7 GB (~n^1.9). The MMD_AT_PLUS_A ordering did not
@@ -340,6 +415,17 @@ Nothing is half-edited. Open state of the repository:
 
 ## Next
 
+0. **Bugs found while writing the report (not fixed):**
+   * **Coarsening fails for thin photo parts.** Bracket-on-wood photo, 0.177 m, depth 3 mm:
+     "model has 40,590 DOFs (limit 40,000) and automatic coarsening stopped reducing it (1
+     attempt)". Raising `cad_mesh_size` doesn't reduce the count when the strip is narrower than h.
+     This is inferred from the behaviour, not from the code. Fix idea: scale h by the measured DOF
+     ratio, or also coarsen the layers; then recheck with that photo (`report/photos/`).
+   * **Averaged nodal stress under-reads peaks** by ~7 % at a hole (see Done). Consider showing the
+     unaveraged element peak, or patch recovery.
+   * Face dropdown on photo meshes: 49 face groups, and the extreme-x face is a sliver (clamping it
+     gave 11,600 MPa). Coordinate regions in script mode work.
+   * Classical trust test: consider flagging masks with large interior holes (lost highlights).
 1. **Real-photo benchmark of the 3-photo solid:** 4–6 parts with caliper dimensions, phone at ~5×
    and ~10× the part size. Record the dimension error, proportion mismatch and time per stage.
    Still untuned on real photos: the 5 % mismatch warning, the 70 % SAM-score rule, lens
@@ -350,7 +436,8 @@ Nothing is half-edited. Open state of the repository:
 3. **Faster free-body solve (optional):** the saddle-point LU is the bottleneck (~n^1.9). A
    projected CG on K (rigid modes removed, consistent right-hand side) would scale like the
    supported path. With it, the 40k coarsening target could rise. Measure on the sphere first.
-4. Mask meshes exceed the 12k-tet budget (95k DOFs, 138 s solve for a 7 cm cube); check the
+4. Mask meshes exceed the 12k-tet budget (confirmed again: web-photo bronze bracket 22.7k tets / 117k DOFs
+   with h coarsened 2.85 → 5.36 mm; thin ligaments refine below h). Original note: Mask meshes exceed the 12k-tet budget (95k DOFs, 138 s solve for a 7 cm cube); check the
    estimate in `image_to_mesh.mesh_from_mask`. Hull meshes at the default size are ~13–18k tets.
 5. Validate the single-photo CV path on real workshop photos. The "trusted classical mask"
    thresholds (backdrop spread < 30, area 1–85 %) are untuned.

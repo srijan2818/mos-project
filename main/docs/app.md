@@ -46,13 +46,15 @@ opens the Lab as a dock over the right side of the 3D view; **Analysis workspace
 2. Press **Solve**. The status panel shows the cell and DOF counts, the maximum displacement and
    von Mises stress, the total reaction, and the equilibrium error. The status turns green when the
    equilibrium error is below 1e-6 and amber otherwise; errors in the model text are shown in red
-   with their line number. A model **without supports** (free body) is solved with an indefinite
-   direct solver limited to 120,000 DOFs. Above that, Solve coarsens the mesh automatically
-   instead of failing: it raises the mesh size (STEP, photo and 3-photo meshes) or lowers the
-   box element counts, aiming at ~36,000 DOFs. The direct solve grows ~n^1.9: on a sphere, 21k
-   DOFs took 24 s and 45k took 98 s, while ~100k was still running after 10 min. The status
-   reports the change, and the builder fields (or, in script mode, the `mesh` line) show the new
-   size. A `mesh file` model cannot be re-meshed and still reports the limit.
+   with their line number. **Max DOFs** (above the Solve button, default 40,000) limits the
+   mesh size: a model with more DOFs is coarsened automatically before it is solved. Solve
+   raises the mesh size (STEP, photo and 3-photo meshes) or lowers the box element counts,
+   aiming at 90 % of the limit. The status reports the change, and the builder fields (or, in
+   script mode, the `mesh` line) show the new size. A model **without supports** (free body)
+   is solved with an indefinite direct solver that is also capped at 120,000 DOFs, whatever
+   the field says. That solve grows ~n^1.9: on a sphere, 21k DOFs took 24 s and 45k took 98 s,
+   while ~100k was still running after 10 min. A `mesh file` model cannot be re-meshed and
+   reports an error when it is over the limit.
 3. Explore the **Results** controls, or use **Loads & Supports** to apply moments and forces on
    faces and points.
 4. Switch to **Learning Lab** for point-stress experiments, principal-plane visualisation, Mohr's
@@ -71,6 +73,7 @@ opens the Lab as a dock over the right side of the 3D view; **Analysis workspace
 | **Supports** | Fixed (X, Y, Z), three rollers (one free direction), and Fix X / Y / Z only. A symmetry plane normal to an axis fixes only that component. Solid elements have no rotational DOFs, so a "pinned" face is the same as a fixed one. Changing the geometry source removes supports/loads that named the previous model's `cad_face_N` faces (the status says so). |
 | **Material preset** | fills E, nu, rho and the proportional limit(s); *Custom* keeps the values you typed. |
 | **Proportional limit σ_pl (MPa)** | blank = no check. With a value, every solve flags nodes whose von Mises stress reaches it. Tick **Brittle (Coulomb–Mohr)** to enter separate tension and compression limits (concrete, cast iron). Flagged nodes are circled in red, the legend counts them, and a dialog says the linear FEM result is not valid beyond this point and up to which load factor (1 / max utilisation) it holds. The field *Utilisation (σ/σ_pl)* plots the ratio. See [theory.md](theory.md). |
+| **Max DOFs** | largest model solved as given (default 40,000; `40,000` and `4e4` are accepted). Above it the mesh is coarsened to ~90 % of the limit first. Raise it for finer meshes if you can wait: supported models above 40,000 DOFs use the iterative solver; free bodies stop at 120,000. |
 | **Mesh edges** | draws the element edges |
 | **Load glyphs** | draws 3D arrows and moment indicators representing applied forces and moments |
 | **Section plane normal / position** | cuts the body with a plane normal to x, y or z at a fraction of the bounding box. The colour range stays that of the whole body. |

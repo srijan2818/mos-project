@@ -167,6 +167,10 @@ def scalar_bar_args(title: str, is_dark: bool = True) -> dict:
 # ------------------------------------------------------------------ glyph helpers
 
 
+LOAD_GLYPH_REFERENCE = 1e2
+"""Force (N) / moment (N·m) drawn at nominal arrow length: the app's default load magnitude."""
+
+
 def glyph_magnitude_scale(magnitude: float, reference_magnitude: float = 1.0) -> float:
     """Map a physical load magnitude to a bounded square-root glyph scale."""
     ratio = np.sqrt(abs(float(magnitude)) / max(float(reference_magnitude), 1e-30))
@@ -332,12 +336,12 @@ def build_load_glyphs(case, mesh, model_size: float):
         try:
             if isinstance(load, PointForce):
                 origin = _region_centroid_direct(load.region, mesh)
-                length = _scaled_length(np.linalg.norm(load.force), 1e5)
+                length = _scaled_length(np.linalg.norm(load.force), LOAD_GLYPH_REFERENCE)
                 _add_arrow(origin, load.force, length, "#ef4444")
 
             elif isinstance(load, SurfaceForce):
                 origin = _region_centroid_direct(load.region, mesh)
-                length = _scaled_length(np.linalg.norm(load.force), 1e5)
+                length = _scaled_length(np.linalg.norm(load.force), LOAD_GLYPH_REFERENCE)
                 _add_arrow(origin, load.force, length, "#ef4444")
 
             elif isinstance(load, Traction):
@@ -357,11 +361,11 @@ def build_load_glyphs(case, mesh, model_size: float):
             elif isinstance(load, Moment):
                 origin = (np.asarray(load.origin, float) if load.origin is not None
                           else _region_centroid_direct(load.region, mesh))
-                mg = create_moment_glyph(origin, load.M, model_size, reference_magnitude=1e5)
+                mg = create_moment_glyph(origin, load.M, model_size, reference_magnitude=LOAD_GLYPH_REFERENCE)
                 if mg is not None:
                     glyphs.append((mg, "#a855f7"))
                 else:
-                    _add_arrow(origin, load.M, _scaled_length(np.linalg.norm(load.M), 1e5), "#a855f7")
+                    _add_arrow(origin, load.M, _scaled_length(np.linalg.norm(load.M), LOAD_GLYPH_REFERENCE), "#a855f7")
 
             elif isinstance(load, BodyForce):
                 value = _field_value(load.field, model_center, vector=True)
