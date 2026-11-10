@@ -8,6 +8,8 @@ loads, and view controls; the 3D view is a server-side-rendered VTK scene.
 from __future__ import annotations
 
 import asyncio
+import base64
+import io
 import json
 import logging
 import time
@@ -19,6 +21,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pyvista as pv
+from PIL import Image
 from trame_pyvista.ui import plotter_ui
 from trame.app import get_server
 from trame.ui.vuetify3 import SinglePageWithDrawerLayout
@@ -72,13 +75,21 @@ pv.OFF_SCREEN = True
 # ---------------------------------------------------------------------------
 # Predefined libraries
 # ---------------------------------------------------------------------------
+# Proportional limits (MPa), sources in docs/theory.md "Proportional limit". Published
+# proportional limits are scarce, so these are specified minima used as stand-ins:
+#   metals  sigma_pl = minimum yield (A36 Fy; 6061-T6 and annealed Ti-6Al-4V 0.2 % offset),
+#           checked with von Mises; the true limit of Al/Ti alloys lies somewhat lower;
+#   brittle sigma_pl / sigma_pl_c = tension / compression limits, Coulomb-Mohr check:
+#           concrete f'c = 30 MPa: 0.1 f'c (cracking) / 0.4 f'c (end of near-linear range);
+#           gray iron (ASTM A48 class 30) has no linear range in tension, so its tensile and
+#           compressive *strengths* are used.
 MATERIAL_PRESETS = {
-    "Steel":     {"E": 210e9, "nu": 0.30, "rho": 7850},
-    "Aluminum":  {"E": 68.9e9, "nu": 0.33, "rho": 2700},
-    "Titanium":  {"E": 113.8e9, "nu": 0.34, "rho": 4430},
-    "Concrete":  {"E": 30.0e9, "nu": 0.20, "rho": 2400},
-    "CastIron":  {"E": 120.0e9, "nu": 0.26, "rho": 7200},
-    "Custom":    None,  # keeps whatever E, nu, rho the user typed
+    "Steel":     {"E": 210e9, "nu": 0.30, "rho": 7850, "sigma_pl": 250, "sigma_pl_c": None},
+    "Aluminum":  {"E": 68.9e9, "nu": 0.33, "rho": 2700, "sigma_pl": 240, "sigma_pl_c": None},
+    "Titanium":  {"E": 113.8e9, "nu": 0.34, "rho": 4430, "sigma_pl": 825, "sigma_pl_c": None},
+    "Concrete":  {"E": 30.0e9, "nu": 0.20, "rho": 2400, "sigma_pl": 3, "sigma_pl_c": 12},
+    "CastIron":  {"E": 120.0e9, "nu": 0.26, "rho": 7200, "sigma_pl": 214, "sigma_pl_c": 752},
+    "Custom":    None,  # keeps whatever the user typed
 }
 
 LAB_CASE_PRESETS = {
@@ -106,29 +117,20 @@ CAD_PRESETS = [
 
 # Solid elements carry no rotational DOFs, so a "pinned" face is the same as a fixed one.
 # Values must be unique: a v-select displays every item whose value matches.
-# Capture setups for the multi-view solid (see mos.core.marker, docs/image-reconstruction.md).
-# "expect" quotes the synthetic measurements on a 60 x 40 x 30 mm box.
-MV_MODES = {
-    "lmat4": {"views": ["Top (straight down)", "Front, table level, ~20° to one side",
-                        "Side, ~20° above the table", "3/4 view from above, both sheets visible"],
-              "min_views": 4,
-              "help": "Print both sheets at 100 %: FLOOR flat under the part, BACK upright behind it "
-                      "along the far edge. Same camera and zoom for all four photos.",
-              "expect": "Most accurate: height within ~1 mm, length/width +5–7 % (perspective)."},
-    "flat3": {"views": ["Top (straight down)", "Front, ~20° above the table",
-                        "Side, ~20° above the table"],
-              "min_views": 3,
-              "help": "Print the FLOOR sheet at 100 % and lay it flat under the part. The mat must "
-                      "stay visible, so no photo can be at table level.",
-              "expect": "Simplest, but the height is over-estimated: about +40 % at 20° views "
-                        "(no photo sees the top edge-on)."},
-    "video": {"views": None, "min_views": 6,
-              "help": "FLOOR sheet flat under the part. Start the video straight above the part, "
-                      "then circle it ~20–30° above the table. Accept the part in two frames, then "
-                      "auto-select the rest.",
-              "expect": "More views than three photos, but still no table-level view: height about "
-                        "+14 % (15–30° orbit)."},
-}
+# Three-photo solid (mos.core.multiview_hull): slot order, what to photograph, image axes.
+ORTHO_VIEWS = [
+    {"axis": "front", "title": "Front · level with the part, looking straight at it",
+     "axes": "→ length x   ↑ height z"},
+    {"axis": "top", "title": "Top · straight down, the front edge at the bottom of the photo",
+     "axes": "→ length x   ↑ depth y (away from you)"},
+    {"axis": "side", "title": "Right side · level, from the part's right",
+     "axes": "→ depth y (front → back)   ↑ height z"},
+]
+ORTHO_HELP = ("Plain background, part in the middle of each photo. Shoot from at least 5× the "
+              "part's size and zoom in: parts at different depths are magnified differently "
+              "(measured on an L-bracket at 5×: sizes within 6 %, volume +7 %; at 10×: 3 %, +4 %). "
+              "Check that each outline below shows the stated axes; flip or rotate it if not: a "
+              "mirrored photo can still give a consistent (wrong) solid.")
 
 SUPPORT_COMP_OPTIONS = [
     {"title": "Fixed / Clamped (X, Y, Z)", "value": "xyz"},
@@ -214,14 +216,13 @@ def main(argv=None):
     S = SimpleNamespace(grid=None, scalars={}, u_pts=None, res=None,
                         preview_mesh=None,
                         spec=None, model=None, case=None, main_actor=None,
-                        cached_solver=None, live_response=None,
+                        cached_solver=None, live_response=None, limit_nodes=None,
                         cached_geometry_signature=None, solved_spec_text=None,
                         lab_refreshed_inputs=None,
                         point_picker_installed=False, analysis_actors=[],
                         geometry_identity=None,
                         cv_source=None, cv_auto_points=[], cv_auto_bbox=None,
-                        mv3_rig=None, mv3_masks={}, mv3_sig=None, cv_exclude=None,
-                        cv_prior=None,
+                        mv3_masks={}, mv3_sig=None,
                         cv_mask=None,
                         cancel_event=threading.Event())
 
@@ -501,6 +502,17 @@ def main(argv=None):
         bounds = S.grid.bounds
         diag = float(np.linalg.norm(np.ptp(np.asarray(S.grid.points), axis=0)))
         mesh_ref = S.model.mesh if S.model else None
+
+        # Nodes at/over the proportional limit: red halo + red dot at the deformed position
+        if S.limit_nodes is not None and len(S.limit_nodes):
+            pts = (S.grid.points[S.limit_nodes] + float(state.scale) * S.u_pts[S.limit_nodes])
+            cloud = pv.PolyData(np.ascontiguousarray(pts, dtype=float))
+            # Screen-space discs keep their size at any zoom. Not in S.analysis_actors: the probe
+            # overlay removes those on every redraw; pl.clear() above drops these instead.
+            pl.add_points(cloud, color="#ef4444", point_size=26, opacity=0.35,
+                          render_points_as_spheres=True, pickable=False)
+            pl.add_points(cloud, color="#b91c1c", point_size=9,
+                          render_points_as_spheres=True, pickable=False)
 
         # Highlight support and load faces for clear visual feedback
         if bool(state.show_face_highlight):
@@ -803,6 +815,18 @@ def main(argv=None):
         return dropped
 
     # ------------------------------------------------------------------ spec rebuild
+    def _limit_terms():
+        """`, sigma_pl = …[, sigma_pl_c = …]` (Pa) from the MPa inputs; '' when left blank."""
+        spl, splc = str(state.mat_spl or "").strip(), str(state.mat_splc or "").strip()
+        if not spl:
+            return ""
+        out = f", sigma_pl = {float(spl) * 1e6:.4g}"
+        if bool(state.mat_brittle):
+            if not splc:
+                raise ValueError("brittle material: enter the compression limit (MPa)")
+            out += f", sigma_pl_c = {float(splc) * 1e6:.4g}"
+        return out
+
     def _rebuild_spec_from_interactive(mesh_ref_override=None):
         """Construct a valid .mos script from the interactive UI state.
 
@@ -813,7 +837,7 @@ def main(argv=None):
 
         # 1. Mesh
         if state.geom_mode == "cv" and str(getattr(state, "cv_mesh_source", "step")) == "hull":
-            # Solid carved from the three-view photo session (marker mat poses + masks).
+            # Solid carved from the three-photo session (outlines + orientation + scale).
             ms = f" {float(state.cad_mesh_size):.3g}" if state.cad_mesh_size else ""
             lines.append(f"mesh     hull {json.dumps(str(state.mv3_session))}{ms}")
         elif state.geom_mode == "cv" and str(getattr(state, "cv_mesh_source", "step")) == "mask":
@@ -840,7 +864,8 @@ def main(argv=None):
             lines.append(f"mesh     box L H W {state.box_nx} {state.box_ny} {state.box_nz} {state.box_elem}")
 
         # 2. Material
-        lines.append(f"material E = {float(state.mat_E):.4e}, nu = {float(state.mat_nu):.4g}, rho = {float(state.mat_rho):.4g}")
+        lines.append(f"material E = {float(state.mat_E):.4e}, nu = {float(state.mat_nu):.4g}, "
+                     f"rho = {float(state.mat_rho):.4g}{_limit_terms()}")
         lines.append("")
 
         # 3. Supports
@@ -1164,7 +1189,8 @@ def main(argv=None):
             S.spec, S.model, S.case, S.res = spec, model, case, result
             S.solved_spec_text = str(state.spec_text)
             state.analysis_result_warning = ""
-            S.scalars = viz.compute_scalars(result)
+            S.scalars = viz.compute_scalars(result, model.material)
+            _check_limit(model.material)
             S.u_pts = np.ascontiguousarray(result.u_nodal.T)
             state.field_items = list(S.scalars)
             if state.field not in S.scalars:
@@ -1317,6 +1343,48 @@ def main(argv=None):
         if on_done:
             on_done(False)
 
+    LIMIT_MARKERS_MAX = 2000   # red circles drawn at most (highest utilisation first)
+
+    def _check_limit(material):
+        """Flag nodes at or beyond the proportional limit; open the warning dialog if any.
+
+        Reads the utilisation field of ``S.scalars`` (element-vertex nodal stresses). Linear
+        elasticity makes U proportional to the loads, so the result is valid up to
+        1 / max(U) times the applied loads.
+        """
+        S.limit_nodes = None
+        state.update({"limit_count": 0, "limit_text": "", "limit_dialog": False})
+        if viz.UTILISATION not in S.scalars:
+            return
+        U = S.scalars[viz.UTILISATION][0]
+        u_max = float(np.max(U))
+        hit = np.flatnonzero(U >= 1.0)
+        if not hit.size:
+            return
+        S.limit_nodes = hit[np.argsort(-U[hit])][:LIMIT_MARKERS_MAX]
+        div = viz.STRESS_UNITS[state.stress_unit]
+        if material.sigma_pl_c is None:
+            what = (f"peak von Mises {u_max * material.sigma_pl / div:.4g} {state.stress_unit} vs "
+                    f"σ_pl = {material.sigma_pl / div:.4g} {state.stress_unit}")
+        else:
+            what = (f"peak Coulomb–Mohr utilisation {u_max:.3g} (tension limit "
+                    f"{material.sigma_pl / div:.4g}, compression limit {material.sigma_pl_c / div:.4g} "
+                    f"{state.stress_unit})")
+        capped = (f" Only the {LIMIT_MARKERS_MAX} most stressed are circled."
+                  if hit.size > LIMIT_MARKERS_MAX else "")
+        text = (f"{hit.size} node(s) have reached the proportional limit ({what}). The FEM "
+                f"calculation is linear-elastic and is not valid beyond this point: the linear "
+                f"result holds only up to {1.0 / u_max:.3g} × the applied loads.{capped} "
+                "Very local peaks at clamped corners or point loads depend on the mesh.")
+        state.update({"limit_count": int(hit.size), "limit_text": text, "limit_dialog": True})
+        state.analysis_result_warning = _limit_warning()
+
+    def _limit_warning():
+        """Dock warning for a result with nodes beyond the proportional limit ('' if none)."""
+        n = int(state.limit_count or 0)
+        return (f"Proportional limit exceeded at {n} node(s): linear FEM results are not valid "
+                "at this load." if n else "")
+
     def _apply_solution(spec, text, model, case, res, cached, live_status, dropped, on_done):
         """UI thread: install a finished solve and refresh every view."""
         try:
@@ -1334,7 +1402,8 @@ def main(argv=None):
             S.solved_spec_text = text
             state.analysis_result_warning = ""
             S.cached_geometry_signature = _geometry_signature(spec)
-            S.scalars = viz.compute_scalars(res)
+            S.scalars = viz.compute_scalars(res, model.material)
+            _check_limit(model.material)
             S.u_pts = np.ascontiguousarray(res.u_nodal.T)
             _refresh_live_load_items()
 
@@ -1543,7 +1612,6 @@ def main(argv=None):
         _clear_cv_result()
         state.cv_points, state.cv_candidate = [], None
         state.mv3_active = -1
-        S.cv_exclude = S.cv_prior = None
         try:
             if state.cv_source_mode == "webcam":
                 if not state.cv_image_b64:
@@ -1576,11 +1644,8 @@ def main(argv=None):
                 ui(lambda: state.update({"cv_running": False}))
                 return
             try:
-                kw = {"exclude": S.cv_exclude} if S.cv_exclude else {}
-                if S.cv_prior is not None:
-                    kw["prior"] = S.cv_prior
                 res = analyze_image_object(img_source, reference_scale=ref_scale,
-                                           points=points, labels=labels, candidate=candidate, **kw)
+                                           points=points, labels=labels, candidate=candidate)
             except Exception as e:
                 if S.cancel_event.is_set():
                     ui(lambda: state.update({"cv_running": False, "cv_status": "CV analysis cancelled."}))
@@ -1679,6 +1744,7 @@ def main(argv=None):
             ok = list(state.mv3_mask_ok)
             ok[k] = True
             state.mv3_mask_ok = ok
+            _mv_outline(k)
             state.cv_status = f"Part accepted in {_mv_label(k)}."
 
     ctrl.cv_mask_smaller = lambda: cv_mask_step(-1)
@@ -1686,235 +1752,97 @@ def main(argv=None):
     ctrl.cv_clear_clicks = cv_clear_clicks
     ctrl.accept_cv_mask = accept_cv_mask
 
-    # --- multi-view solid on the marker mat (mos.core.marker / multiview_hull) -------------
-    # Three capture setups (measured on a 60 x 40 x 30 mm box, synthetic photos):
-    #   lmat4  L-mat, 4 photos            height within ~1 mm, volume +5-7 %
-    #   flat3  flat mat, 3 photos at ~20 deg  height +39 %: no photo sees the top edge-on
-    #   video  flat mat, orbit video      height ~+14 % (15-30 deg orbit), more views
-    def _mv_sources():
-        """Image data URLs of the current mode: the photo slots, or the video frames."""
-        if state.mv3_mode == "video":
-            return list(state.mvv_frames or [])
-        return [getattr(state, f"mv3_img_{k}") for k in range(len(MV_MODES[state.mv3_mode]["views"]))]
-
+    # --- three-photo solid (mos.core.multiview_hull) ------------------------------------
     def _mv_label(k):
-        """Human name of view k ("photo 2 (Front …)" or "frame 7")."""
-        if state.mv3_mode == "video":
-            return f"frame {k + 1}"
-        return f"photo {k + 1} ({MV_MODES[state.mv3_mode]['views'][k]})"
+        """Human name of photo k."""
+        return f"photo {k + 1} ({ORTHO_VIEWS[k]['axis']})"
 
-    def _mv_reset(n):
-        """Forget poses and masks (new photos, new frames or a new mode)."""
-        S.mv3_rig, S.mv3_masks = None, {}
-        state.update({"mv3_rig_ok": False, "mv3_mask_ok": [False] * n, "mv3_pose_info": [""] * n,
-                      "mv3_active": -1})
+    def _mv_view(k):
+        """The OrthoView of accepted photo k, with the user's flip / rotation."""
+        from mos.core.multiview_hull import OrthoView
+        return OrthoView(ORTHO_VIEWS[k]["axis"], S.mv3_masks[k], ORTHO_VIEWS[k]["axis"],
+                         bool(state.mv3_flip[k]), int(state.mv3_rot[k]))
 
-    def _mv_images():
-        """The views decoded and normalised exactly like the CV analysis does."""
-        from mos.core.cv_detector import _load_image
-        return [np.asarray(_load_image(src)) for src in _mv_sources()]
+    def _mv_outline(k):
+        """Thumbnail of photo k's accepted outline as it will be used (oriented, cropped)."""
+        from mos.core.multiview_hull import crop_part
+        outlines = list(state.mv3_outline)
+        if k not in S.mv3_masks:
+            outlines[k] = ""
+        else:
+            crop = crop_part(_mv_view(k).oriented())
+            part = np.pad(crop, max(4, int(0.08 * max(crop.shape))))   # margin: the outline shows
+            img = Image.fromarray(np.where(part[..., None], [37, 99, 235], [226, 232, 240]).astype(np.uint8))
+            img.thumbnail((160, 120))
+            buf = io.BytesIO()
+            img.save(buf, "PNG")
+            outlines[k] = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+        state.mv3_outline = outlines
 
-    def mv3_marker_pdf():
-        """Write the printable marker sheets (FLOOR + BACK) and offer them for download."""
-        from mos.core.marker import board_pdf
-        board_pdf(GENERATED_DIR / "marker_mat.pdf")
-        state.mv3_pdf_ready = True
-
-    def mv3_check_mat():
-        """Detect the marker sheet(s) in every view and solve the camera poses."""
-        srcs = _mv_sources()
-        need = MV_MODES[state.mv3_mode]["min_views"]
-        if state.mv3_mode == "video":
-            if len(srcs) < need:
-                state.mv3_msg = f"Record or upload a video first (need at least {need} frames)."
-                return
-        elif not all(srcs):
-            state.mv3_msg = f"Take all {len(srcs)} photos first."
-            return
-        if bool(state.mv3_running):
-            return
-        state.update({"mv3_running": True, "mv3_msg": "Finding the marker sheets…"})
-        mode = state.mv3_mode
-
-        def _worker(ui):
-            try:
-                from mos.core.marker import solve_rig
-                rig, err = solve_rig(_mv_images()), None
-            except Exception as exc:
-                rig, err = None, exc
-
-            def apply():
-                """Report per-view pose quality on the UI thread."""
-                state.mv3_running = False
-                if err is not None:
-                    S.mv3_rig = None
-                    state.update({"mv3_rig_ok": False, "mv3_msg": f"Marker mat: {err}"})
-                    return
-                S.mv3_rig = rig
-                info = ["mat not usable (left out)" if p is None else
-                        f"{p.corners} corners · {p.elevation_deg():.0f}° above table · fit {p.rms_px:.1f} px"
-                        for p in rig.poses]
-                posed = [p for p in rig.poses if p is not None]
-                msgs = [m for m in rig.messages if mode == "lmat4" or "both sheets" not in m]
-                if mode == "lmat4":
-                    ok = all(p is not None for p in rig.poses) and rig.back_to_world is not None
-                    if rig.poses[1] is not None and rig.poses[1].elevation_deg() > 12:
-                        msgs.append("photo 2 is not at table level: the height will be over-estimated")
-                elif mode == "flat3":
-                    ok = len(posed) == len(rig.poses)
-                else:
-                    ok = len(posed) >= MV_MODES["video"]["min_views"]
-                    msgs.append(f"{len(posed)} of {len(rig.poses)} frames have a pose")
-                if mode != "lmat4" and posed:
-                    low = min(p.elevation_deg() for p in posed)
-                    msgs.append(f"lowest view {low:.0f}° above the table: with a flat mat the height is "
-                                "over-estimated (use the L-mat for heights)")
-                state.update({"mv3_pose_info": info, "mv3_rig_ok": ok, "mv3_msg": "; ".join(msgs)})
-            ui(apply)
-        _spawn(_worker, "mos-mv3-rig")
-
-    def _mv_exclusions(k):
-        """Projected outlines of the sheets in view k (the selection must not pick them)."""
-        from mos.core.marker import BACK, FLOOR, sheet_mask
-        pose = S.mv3_rig.poses[k]
-        out = [sheet_mask(pose, FLOOR)]
-        if S.mv3_rig.back_to_world is not None:
-            out.append(sheet_mask(pose, BACK, S.mv3_rig.back_to_world))
-        return out
-
-    def _mv_prior(k, accepted):
-        """Silhouette expected in view k from the solid of the other accepted views (>= 2)."""
-        others = [j for j in accepted if j != k and S.mv3_rig.poses[j] is not None]
-        if len(others) < 2:
-            return None
-        from mos.core.multiview_hull import HullView, carve, project_hull
-        try:
-            hull = carve([HullView(f"v{j}", S.mv3_masks[j], S.mv3_rig.poses[j]) for j in others],
-                         resolution=48)
-        except ValueError as exc:
-            log.warning("no prior from the other views: %s", exc)
-            return None
-        return project_hull(hull, S.mv3_rig.poses[k])
+    def mv3_orient(k, what):
+        """Mirror ('flip') or turn ('rot', 90° counter-clockwise) photo k's outline."""
+        k = int(k)
+        key = {"flip": "mv3_flip", "rot": "mv3_rot"}[what]
+        vals = list(getattr(state, key))
+        vals[k] = (not vals[k]) if what == "flip" else (int(vals[k]) + 1) % 4
+        setattr(state, key, vals)
+        _mv_outline(k)
 
     def mv3_select(k):
-        """Load view k into the preview above to click-select and accept the part in it."""
+        """Load photo k into the preview above to click-select and accept the part in it."""
         k = int(k)
-        srcs = _mv_sources()
-        if not (0 <= k < len(srcs)) or not srcs[k]:
+        src = getattr(state, f"mv3_img_{k}")
+        if not src:
             state.mv3_msg = f"{_mv_label(k).capitalize()} is missing."
-            return
-        if S.mv3_rig is None or S.mv3_rig.poses[k] is None:
-            state.mv3_msg = ("Check the marker mat first: its outline keeps the selection off the sheets."
-                             if S.mv3_rig is None else f"{_mv_label(k).capitalize()} has no pose; pick another.")
             return
         _clear_cv_result()
         state.mv3_active = k
         state.cv_points, state.cv_candidate = [], None
-        S.cv_exclude = _mv_exclusions(k)
-        S.cv_prior = _mv_prior(k, [j for j, ok in enumerate(state.mv3_mask_ok) if ok])
-        S.cv_source = (srcs[k], float(state.cv_ref_scale or 0.3))
+        S.cv_source = (src, float(state.cv_ref_scale or 0.3))
         _run_cv(f"Finding the part in {_mv_label(k)}…")
 
-    def mvv_auto_select():
-        """Video: select the part in every remaining posed frame, guided by the accepted ones."""
-        accepted = [j for j, ok in enumerate(state.mv3_mask_ok) if ok]
-        if S.mv3_rig is None or len(accepted) < 2:
-            state.mv3_msg = "Accept the part in at least two frames first (e.g. the first and one ~90° round)."
-            return
-        if bool(state.mv3_running) or bool(state.cv_running):
-            return
-        srcs = _mv_sources()
-        todo = [k for k, p in enumerate(S.mv3_rig.poses) if p is not None and k not in accepted]
-        state.update({"mv3_running": True, "mv3_msg": f"Selecting the part in {len(todo)} frames…"})
-
-        def _worker(ui):
-            ok_list, skipped = list(accepted), []
-            for n, k in enumerate(todo):
-                prior = _mv_prior(k, ok_list)
-                try:
-                    res = analyze_image_object(srcs[k], reference_scale=float(state.cv_ref_scale or 0.3),
-                                               exclude=_mv_exclusions(k), prior=prior)
-                    fit = (res.mask & prior).sum() / max(1, (res.mask | prior).sum()) if prior is not None else 0.0
-                except Exception as exc:
-                    log.warning("frame %d: %s", k + 1, exc)
-                    fit, res = 0.0, None
-                if res is not None and fit >= 0.5:
-                    S.mv3_masks[k] = res.mask
-                    ok_list.append(k)
-                else:
-                    skipped.append(k + 1)
-                msg = f"Selecting the part… {n + 1}/{len(todo)} frames"
-                ui(lambda m=msg: state.update({"mv3_msg": m}))
-
-            def apply():
-                """Mark the auto-selected frames as accepted."""
-                flags = [False] * len(srcs)
-                for j in ok_list:
-                    flags[j] = True
-                state.update({"mv3_running": False, "mv3_mask_ok": flags,
-                              "mv3_msg": f"Part selected in {len(ok_list)} frames"
-                                         + (f"; skipped (did not match the others): {skipped}" if skipped else "")})
-            ui(apply)
-        _spawn(_worker, "mos-mvv-auto")
-
     def mv3_build_and_solve():
-        """Carve the solid from the accepted masks + poses, report consistency, solve."""
-        if not state.mv3_rig_ok or S.mv3_rig is None:
-            state.mv3_msg = "Check the marker mat first."
+        """Carve the solid from the three accepted outlines, report its size, mesh + solve."""
+        if not all(state.mv3_mask_ok):
+            state.mv3_msg = "Select and accept the part in all three photos first."
             return
-        mode = state.mv3_mode
-        use = [k for k, ok in enumerate(state.mv3_mask_ok) if ok and S.mv3_rig.poses[k] is not None]
-        if mode != "video" and len(use) < len(state.mv3_mask_ok):
-            state.mv3_msg = "Select and accept the part in every photo first."
-            return
-        if mode == "video" and len(use) < MV_MODES["video"]["min_views"]:
-            state.mv3_msg = "Too few frames with an accepted part; use Auto-select remaining frames."
+        try:
+            known_m = float(state.mv3_known_mm) / 1000.0
+            if not (np.isfinite(known_m) and known_m > 0):
+                raise ValueError
+        except (TypeError, ValueError):
+            state.mv3_msg = "Enter one measured dimension of the part (mm) for the scale."
             return
         if bool(state.mv3_running):
             return
-        from mos.core.multiview_hull import HullView, carve, save_session
-        views = [HullView(f"view{k + 1}", S.mv3_masks[k], S.mv3_rig.poses[k]) for k in use]
-        bad_size = [v.name for v in views if v.mask.shape[::-1] != tuple(v.pose.image_size)]
-        if bad_size:
-            state.mv3_msg = f"{bad_size}: mask size differs from the photo; reselect the part."
-            return
+        from mos.core.multiview_hull import SIZE_MISMATCH_WARN, carve_ortho, save_session
+        views = [_mv_view(k) for k in range(len(ORTHO_VIEWS))]
+        axis = str(state.mv3_known_axis)
         session = GENERATED_DIR / "hull_sessions" / time.strftime("%Y%m%d_%H%M%S")
-        state.update({"mv3_running": True, "mv3_msg": f"Carving the solid from {len(views)} views…"})
+        state.update({"mv3_running": True, "mv3_msg": "Carving the solid from 3 photos…"})
 
         def _worker(ui):
-            dropped = []
             try:
-                vs = list(views)
-                hull = carve(vs)
-                if mode == "video":   # many views: drop the ones that disagree, carve again
-                    bad = [v.name for v in vs if hull.view_iou[v.name] < 0.85]
-                    if bad and len(vs) - len(bad) >= MV_MODES["video"]["min_views"]:
-                        dropped = bad
-                        vs = [v for v in vs if v.name not in bad]
-                        hull = carve(vs)
-                save_session(session, vs)
+                hull = carve_ortho(views, axis, known_m)
+                save_session(session, views, axis, known_m)
                 err = None
             except Exception as exc:
                 hull, err = None, exc
 
             def apply():
-                """Show the hull's size and per-view agreement, then mesh + solve it."""
+                """Show the solid's size and the photos' agreement, then mesh + solve it."""
                 state.mv3_running = False
                 if err is not None:
                     state.mv3_msg = f"Could not build the solid: {err}"
                     return
                 ext = hull.extent() * 1000
-                vals = hull.view_iou
-                bad = [k for k, v in vals.items() if v < 0.85]
-                agree = (", ".join(f"{k}: {v:.2f}" for k, v in vals.items()) if len(vals) <= 6 else
-                         f"min {min(vals.values()):.2f}, median {float(np.median(list(vals.values()))):.2f}")
-                state.mv3_msg = (f"Solid {ext[0]:.0f} × {ext[1]:.0f} × {ext[2]:.0f} mm "
-                                 f"(mat frame x × y × height), {hull.volume * 1e6:.1f} cm³, "
-                                 f"{len(vals)} views. Agreement: {agree}."
-                                 + (f" Dropped (disagreed): {', '.join(dropped)}." if dropped else "")
-                                 + (f" Check {', '.join(bad)}: that mask shows more than the other "
-                                    "views allow (wrong object or the hand?). Select it again: the other "
-                                    "views now guide the choice." if bad else ""))
+                warn = (f" The photos disagree on the proportions by {hull.size_mismatch:.0%}: a "
+                        "hand or a second object in one outline, a tilted photo, or a wrong "
+                        "flip/rotation. Check the outlines." if hull.size_mismatch > SIZE_MISMATCH_WARN
+                        else "")
+                state.mv3_msg = (f"Solid {ext[0]:.1f} × {ext[1]:.1f} × {ext[2]:.1f} mm "
+                                 f"(length × depth × height), {hull.volume * 1e6:.2f} cm³; "
+                                 f"proportions agree within {hull.size_mismatch:.1%}.{warn}")
                 state.mv3_session = str(session)
                 state.cad_mesh_size = round(float(np.max(hull.extent())) / 15.0, 4)
                 state.update({"geom_mode": "cv", "cv_mesh_source": "hull", "config_mode": "interactive"})
@@ -1923,41 +1851,23 @@ def main(argv=None):
             ui(apply)
         _spawn(_worker, "mos-mv3-hull")
 
-    ctrl.mv3_marker_pdf = mv3_marker_pdf
-    ctrl.mv3_check_mat = mv3_check_mat
     ctrl.mv3_select = mv3_select
-    ctrl.mvv_auto_select = mvv_auto_select
+    ctrl.mv3_orient = mv3_orient
     ctrl.mv3_build_and_solve = mv3_build_and_solve
-    ctrl.mvv_select_current = lambda: mv3_select(int(state.mvv_index or 0))
 
-    @state.change("mv3_mode")
-    def _mv_mode_changed(mv3_mode, **_):
-        """Switching setup: new view list, help text, nothing carried over."""
-        m = MV_MODES[mv3_mode]
-        state.update({"mv3_views": m["views"] or [], "mv3_help": m["help"], "mv3_expect": m["expect"]})
-        _mv_reset(len(_mv_sources()))
-        S.mv3_sig = None
-
-    @state.change("mv3_img_0", "mv3_img_1", "mv3_img_2", "mv3_img_3", "mvv_frames")
+    @state.change("mv3_img_0", "mv3_img_1", "mv3_img_2")
     def _mv3_photo_changed(**_):
-        """New photos invalidate the poses; a replaced photo also loses its mask."""
-        srcs = _mv_sources()
-        S.mv3_rig = None
-        if state.mv3_mode == "video":       # a new recording: start over
-            sig = tuple(srcs)
-            if sig != S.mv3_sig:
-                S.mv3_sig = sig
-                _mv_reset(len(srcs))
-                state.mvv_index = 0
-            return
-        sig = tuple(hash(str(x)) for x in srcs)
+        """A replaced photo loses its accepted outline."""
+        sig = tuple(hash(str(getattr(state, f"mv3_img_{k}"))) for k in range(len(ORTHO_VIEWS)))
         old = S.mv3_sig or sig
-        ok = [bool(o and a == b) for o, a, b in zip(state.mv3_mask_ok, old, sig)]
-        for k, keep in enumerate(ok):
-            if not keep:
+        ok = list(state.mv3_mask_ok)
+        for k, (a, b) in enumerate(zip(old, sig)):
+            if a != b:
+                ok[k] = False
                 S.mv3_masks.pop(k, None)
+                _mv_outline(k)
         S.mv3_sig = sig
-        state.update({"mv3_rig_ok": False, "mv3_mask_ok": ok, "mv3_pose_info": [""] * len(srcs)})
+        state.mv3_mask_ok = ok
 
     def _apply_cv_result(res, elapsed):
         """Copy a CVAnalysisResult into the UI state (runs on the UI thread)."""
@@ -2545,6 +2455,9 @@ def main(argv=None):
             state.mat_E = f"{info['E']:.4g}"
             state.mat_nu = f"{info['nu']:.4g}"
             state.mat_rho = f"{info['rho']:.4g}"
+            state.mat_brittle = info["sigma_pl_c"] is not None
+            state.mat_spl = f"{info['sigma_pl']:g}"
+            state.mat_splc = "" if info["sigma_pl_c"] is None else f"{info['sigma_pl_c']:g}"
             if state.config_mode == "interactive":
                 _rebuild_spec_from_interactive()
 
@@ -2880,15 +2793,12 @@ def main(argv=None):
         "solve_running": False,
         "cv_points": [], "cv_candidate": None, "cv_n_candidates": 0,
         "cv_mask_accepted": False, "cv_click_mode": "add",
-        "mv3_img_0": "", "mv3_img_1": "", "mv3_img_2": "", "mv3_img_3": "",
-        "mv3_mask_ok": [False] * 4, "mv3_pose_info": ["", "", "", ""], "mv3_active": -1,
-        "mv3_rig_ok": False, "mv3_running": False, "mv3_msg": "", "mv3_session": "",
-        "mv3_pdf_ready": False, "mv3_mode": "lmat4", "mv3_views": MV_MODES["lmat4"]["views"],
-        "mv3_help": MV_MODES["lmat4"]["help"], "mv3_expect": MV_MODES["lmat4"]["expect"],
-        "mv3_mode_items": [{"title": "L-mat · 4 photos", "value": "lmat4"},
-                           {"title": "Flat mat · 3 photos", "value": "flat3"},
-                           {"title": "Flat mat · video", "value": "video"}],
-        "mvv_frames": [], "mvv_index": 0,
+        "mv3_img_0": "", "mv3_img_1": "", "mv3_img_2": "",
+        "mv3_mask_ok": [False] * 3, "mv3_outline": [""] * 3, "mv3_flip": [False] * 3,
+        "mv3_rot": [0] * 3, "mv3_active": -1, "mv3_running": False, "mv3_msg": "",
+        "mv3_session": "", "mv3_known_axis": "x", "mv3_known_mm": "",
+        "mv3_axis_items": [{"title": "Length x", "value": "x"}, {"title": "Depth y", "value": "y"},
+                           {"title": "Height z", "value": "z"}],
         "cv_features_text": "",
         "cv_annotated_preview": "",
         "cv_step_path": str(GENERATED_DIR / "cv_detected_object.step"),
@@ -2989,6 +2899,8 @@ def main(argv=None):
         "mat_preset": "Steel",
         "mat_preset_items": list(MATERIAL_PRESETS),
         "mat_E": "210e9", "mat_nu": "0.3", "mat_rho": "7850",
+        "mat_spl": "250", "mat_splc": "", "mat_brittle": False,
+        "limit_dialog": False, "limit_text": "", "limit_count": 0,
         # Supports & Loads
         "supports_list": [{"face": "-x", "comps": "xyz"}],
         "loads_list": [{"mode": "force", "target": "face", "face": "+x",
@@ -3156,7 +3068,8 @@ def main(argv=None):
 
     @state.change("geom_mode", "cad_preset", "cad_custom_path", "cad_mesh_size",
                   "box_L", "box_H", "box_W", "box_nx", "box_ny", "box_nz", "box_elem",
-                  "mat_E", "mat_nu", "mat_rho", "include_gravity")
+                  "mat_E", "mat_nu", "mat_rho", "mat_spl", "mat_splc", "mat_brittle",
+                  "include_gravity")
     def _interactive_param_changed(**_):
         if state.config_mode == "interactive":
             _drop_stale_face_refs()
@@ -3217,7 +3130,7 @@ def main(argv=None):
                 "model; run Solve before interpreting them or changing loads."
             )
         else:
-            state.analysis_result_warning = ""
+            state.analysis_result_warning = _limit_warning()
 
         # Always resample from the latest published Results object. Do this without
         # creating/removing VTK actors or calling view.update().
@@ -3602,29 +3515,18 @@ def main(argv=None):
                                     with v3.VExpansionPanels(variant="accordion", density="compact", multiple=True, classes="mt-3"):
                                         with v3.VExpansionPanel():
                                             with v3.VExpansionPanelTitle():
-                                                html.Span("Multi-view solid on a marker mat · real 3D (recommended)",
+                                                html.Span("3-photo solid · real 3D (recommended)",
                                                           classes="text-caption font-weight-bold")
                                             with v3.VExpansionPanelText():
-                                                html.Div("One photo cannot show depth or hidden sides; several views "
-                                                         "with known camera poses can.", classes="text-caption mb-1")
-                                                v3.VSelect(v_model=("mv3_mode",), items=("mv3_mode_items",),
-                                                           item_title="title", item_value="value",
-                                                           label="Capture setup", density="compact",
-                                                           hide_details=True, classes="mb-1")
-                                                html.Div("{{ mv3_help }}", classes="text-caption mb-1")
-                                                html.Div("{{ mv3_expect }}", classes="text-caption text-warning mb-2")
-                                                with html.Div(classes="d-flex ga-1 mb-2"):
-                                                    v3.VBtn("Make marker sheets", size="x-small", variant="tonal",
-                                                            prepend_icon="mdi-printer", click=ctrl.mv3_marker_pdf)
-                                                    html.A("Download PDF", href="mos_generated/marker_mat.pdf",
-                                                           target="_blank", v_show="mv3_pdf_ready",
-                                                           classes="text-caption align-self-center")
-                                                # photo modes: up to four guided photos
-                                                for k in range(4):
+                                                html.Div("One photo cannot show depth or hidden sides. Three "
+                                                         "photos along the part's axes give its solid "
+                                                         "(intersection of the three outlines).",
+                                                         classes="text-caption mb-1")
+                                                html.Div(ORTHO_HELP, classes="text-caption text-warning mb-2")
+                                                for k, v in enumerate(ORTHO_VIEWS):
                                                     with html.Div(classes="mb-2 pa-2 rounded",
-                                                                  style="border:1px solid rgba(148,163,184,.25)",
-                                                                  v_show=f"mv3_mode !== 'video' && {k} < mv3_views.length"):
-                                                        html.Div(f"{k + 1}. {{{{ mv3_views[{k}] }}}}", classes="text-caption font-weight-bold")
+                                                                  style="border:1px solid rgba(148,163,184,.25)"):
+                                                        html.Div(f"{k + 1}. {v['title']}", classes="text-caption font-weight-bold")
                                                         html.Input(id=f"mos_mv3_input_{k}", type="file", accept="image/*",
                                                                    style="display:none;",
                                                                    change=f"window.mosUpload.single($event, {{data: 'mv3_img_{k}', status: 'mv3_msg'}}, 25)")
@@ -3638,41 +3540,30 @@ def main(argv=None):
                                                                     disabled=(f"!mv3_img_{k} || cv_running",))
                                                             v3.VIcon("mdi-image-check", color="success", size="small", v_show=f"mv3_img_{k}")
                                                             v3.VChip("part ✓", color="success", size="x-small", v_show=f"mv3_mask_ok[{k}]")
-                                                        html.Div(f"{{{{ mv3_pose_info[{k}] }}}}", classes="text-caption text-medium-emphasis")
-                                                # video mode: frames from a recording or a video file
-                                                with html.Div(v_show="mv3_mode === 'video'", classes="mb-2"):
-                                                    html.Input(id="mos_mvv_input", type="file", accept="video/*", style="display:none;",
-                                                               change="window.mosUpload.videoFrames($event, {frames: 'mvv_frames', status: 'mv3_msg'})")
-                                                    with html.Div(classes="d-flex flex-wrap ga-1 mb-1"):
-                                                        v3.VBtn("Record with camera", size="x-small", prepend_icon="mdi-record-circle",
-                                                                click="window.mosUpload.recordFrames({frames: 'mvv_frames', status: 'mv3_msg'})")
-                                                        v3.VBtn("Upload video", size="x-small", variant="tonal", prepend_icon="mdi-filmstrip",
-                                                                click="window.mosUpload.pick('mos_mvv_input')")
-                                                    with html.Div(v_show="mvv_frames.length > 0"):
-                                                        html.Div("{{ mvv_frames.length }} frames · part accepted in "
-                                                                 "{{ mv3_mask_ok.filter(Boolean).length }}",
-                                                                 classes="text-caption")
-                                                        v3.VSlider(v_model=("mvv_index",), min=0, max=("Math.max(0, mvv_frames.length - 1)",),
-                                                                   step=1, density="compact", hide_details=True,
-                                                                   thumb_label=True)
-                                                        html.Img(src=("mvv_frames[mvv_index]",),
-                                                                 style="width:100%; height:140px; object-fit:contain; background:#111; border-radius:8px;")
-                                                        html.Div("Frame {{ mvv_index + 1 }} · {{ mv3_pose_info[mvv_index] || '' }}"
-                                                                 "{{ mv3_mask_ok[mvv_index] ? ' · part ✓' : '' }}",
-                                                                 classes="text-caption text-medium-emphasis")
-                                                        with html.Div(classes="d-flex ga-1 mt-1"):
-                                                            v3.VBtn("Select part in this frame", size="x-small", variant="tonal", color="primary",
-                                                                    click=ctrl.mvv_select_current, disabled=("cv_running || !mv3_rig_ok",))
-                                                            v3.VBtn("Auto-select remaining frames", size="x-small", variant="tonal",
-                                                                    click=ctrl.mvv_auto_select,
-                                                                    disabled=("mv3_running || cv_running || mv3_mask_ok.filter(Boolean).length < 2",))
-                                                v3.VBtn("Check marker mat", block=True, size="small", variant="tonal",
-                                                        prepend_icon="mdi-grid", click=ctrl.mv3_check_mat,
-                                                        loading=("mv3_running",), classes="mb-1")
+                                                        with html.Div(v_show=f"mv3_outline[{k}]", classes="d-flex align-center ga-2 mt-1"):
+                                                            html.Img(src=(f"mv3_outline[{k}]",),
+                                                                     style="max-width:160px; max-height:120px; border-radius:4px;")
+                                                            with html.Div():
+                                                                html.Div(v["axes"], classes="text-caption")
+                                                                with html.Div(classes="d-flex ga-1 mt-1"):
+                                                                    v3.VBtn("Flip", size="x-small", variant="tonal",
+                                                                            prepend_icon="mdi-flip-horizontal",
+                                                                            click=(ctrl.mv3_orient, f"[{k}, 'flip']"))
+                                                                    v3.VBtn("Rotate 90°", size="x-small", variant="tonal",
+                                                                            prepend_icon="mdi-rotate-left",
+                                                                            click=(ctrl.mv3_orient, f"[{k}, 'rot']"))
+                                                with html.Div(classes="d-flex ga-1 mb-2"):
+                                                    v3.VSelect(v_model=("mv3_known_axis",), items=("mv3_axis_items",),
+                                                               item_title="title", item_value="value",
+                                                               label="Measured dimension", density="compact",
+                                                               hide_details=True)
+                                                    v3.VTextField(v_model=("mv3_known_mm",), label="Length (mm)",
+                                                                  placeholder="e.g. 60", density="compact",
+                                                                  hide_details=True)
                                                 v3.VBtn("Build solid & solve FEA", block=True, size="small", color="primary",
                                                         prepend_icon="mdi-cube-scan", click=ctrl.mv3_build_and_solve,
-                                                        disabled=("!mv3_rig_ok || mv3_running || (mv3_mode !== 'video' && !mv3_mask_ok.every(Boolean)) || "
-                                                                  "(mv3_mode === 'video' && mv3_mask_ok.filter(Boolean).length < 6)",))
+                                                        loading=("mv3_running",),
+                                                        disabled=("mv3_running || !mv3_mask_ok.every(Boolean) || !mv3_known_mm",))
                                                 html.Div("{{ mv3_msg }}", classes="text-caption text-medium-emphasis mt-1",
                                                          style="white-space:pre-line")
                                         with v3.VExpansionPanel():
@@ -3942,6 +3833,21 @@ def main(argv=None):
                                                   density="compact", hide_details=True)
                                     v3.VTextField(v_model=("mat_rho",), label="rho (kg/m3)",
                                                   density="compact", hide_details=True)
+                                with html.Div(classes="d-flex ga-1 mt-2 align-center"):
+                                    v3.VTextField(v_model=("mat_spl",),
+                                                  label=("mat_brittle ? 'Tension limit (MPa)' : "
+                                                         "'Proportional limit σ_pl (MPa)'",),
+                                                  placeholder="blank = no check",
+                                                  density="compact", hide_details=True)
+                                    v3.VTextField(v_show="mat_brittle", v_model=("mat_splc",),
+                                                  label="Compression limit (MPa)",
+                                                  density="compact", hide_details=True)
+                                v3.VCheckbox(v_model=("mat_brittle",),
+                                             label="Brittle (Coulomb–Mohr: separate tension / compression limits)",
+                                             density="compact", hide_details=True)
+                                html.Div("Ductile: nodes with von Mises ≥ σ_pl are flagged. Brittle: "
+                                         "max(σ1,0)/St + max(−σ3,0)/Sc ≥ 1 is flagged. Beyond this the linear "
+                                         "model is not valid.", classes="text-caption text-medium-emphasis")
 
                         # SCRIPT EDITOR
                         with html.Div(v_show="config_mode === 'script'"):
@@ -4370,9 +4276,27 @@ def main(argv=None):
                                 with html.Span(classes="mos-legend-chip"):
                                     html.Span("●", style="color:#f59e0b;font-size:12px;")
                                     html.Span("Inspection Probe")
+                                with html.Span(v_show="limit_count > 0", classes="mos-legend-chip"):
+                                    html.Span("◯", style="color:#dc2626;font-size:14px;font-weight:bold;")
+                                    html.Span("Proportional limit reached ({{ limit_count }})")
 
                             view = plotter_ui(pl, mode="server")
                             ctrl.view_update = view.update
+
+                            with v3.VDialog(v_model=("limit_dialog",), max_width=560):
+                                with v3.VCard(classes="pa-2"):
+                                    with v3.VCardTitle(classes="d-flex align-center ga-2 text-error"):
+                                        v3.VIcon("mdi-alert-octagon", color="error")
+                                        html.Span("Proportional limit reached")
+                                    v3.VCardText("{{ limit_text }}")
+                                    v3.VCardText("The affected nodes are circled in red. Reduce the "
+                                                 "loads, change the material or geometry, or treat "
+                                                 "the result as invalid beyond the first yield.",
+                                                 classes="text-caption")
+                                    with v3.VCardActions():
+                                        v3.VSpacer()
+                                        v3.VBtn("OK", color="primary", variant="flat",
+                                                click="limit_dialog = false")
 
             # Analysis dock: the selected point, plane and load stay in one context.
             with html.Div(v_show="analysis_dock_open", classes="mos-analysis-dock"):

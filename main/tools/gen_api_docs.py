@@ -16,7 +16,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 MODULES = ["mos/core/fields.py", "mos/core/material.py", "mos/core/regions.py", "mos/core/loads.py",
            "mos/core/model.py", "mos/core/spec.py", "mos/core/solver.py", "mos/core/post.py",
            "mos/core/meshes.py", "mos/core/gmsh_session.py", "mos/core/image_to_mesh.py", "mos/core/multiview.py", "mos/core/image_reconstruction.py",
-           "mos/core/marker.py", "mos/core/multiview_hull.py", "mos/lab/__init__.py", "mos/lab/stress.py", "mos/lab/traction.py",
+           "mos/core/multiview_hull.py", "mos/lab/__init__.py", "mos/lab/stress.py", "mos/lab/traction.py",
            "mos/lab/summary.py", "mos/viz.py", "mos/templates.py", "mos/app/main.py"]
 
 HEADER = """# API reference

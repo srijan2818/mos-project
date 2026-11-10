@@ -25,6 +25,14 @@ def test_compute_scalars():
     assert np.allclose(sc["γxy"][0], 2e-3) and sc["γxy"][1] == "strain"   # engineering shear
     assert sc["ε1 (max principal)"][0].shape == (3,)
     assert all(v[0].shape == (3,) for v in sc.values())
+    assert viz.UTILISATION not in sc                      # no material limit, no field
+
+
+def test_compute_scalars_utilisation():
+    from mos.core.material import Material
+    sc = viz.compute_scalars(_res(), Material.isotropic(1e9, 0.3, 0.0, 100.0))
+    U, kind = sc[viz.UTILISATION]
+    assert kind == "ratio" and np.allclose(U, np.array([100, 30 * np.sqrt(3), 50]) / 100.0)
 
 
 def test_suggest_scale_and_clip():

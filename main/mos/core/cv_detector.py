@@ -1024,13 +1024,7 @@ def _skin_fraction(rgb: np.ndarray, mask: np.ndarray) -> float:
     return float(np.mean((cr >= 135) & (cr <= 175) & (cb >= 85) & (cb <= 135)))
 
 
-def _overlaps(m: np.ndarray, exclude: Optional[List[np.ndarray]], thr: float = 0.5) -> bool:
-    """True if mask ``m`` is mostly one of the ``exclude`` regions (IoU > thr), e.g. a marker sheet."""
-    return any((m & e).sum() > thr * max(1, (m | e).sum()) for e in exclude or [])
-
-
-def default_candidate(masks: List[np.ndarray], scores: Optional[List[float]] = None,
-                      exclude: Optional[List[np.ndarray]] = None) -> int:
+def default_candidate(masks: List[np.ndarray], scores: Optional[List[float]] = None) -> int:
     """Index of the mask to show first among SAM's nested candidates (sorted small -> large).
 
     The largest candidate that touches at most one image border, covers at most 60 % of the
@@ -1041,7 +1035,7 @@ def default_candidate(masks: List[np.ndarray], scores: Optional[List[float]] = N
     """
     top = max(scores) if scores else 0.0
     ok = [i for i, m in enumerate(masks)
-          if _touched_sides(m) <= 1 and 0 < m.mean() <= 0.6 and not _overlaps(m, exclude)
+          if _touched_sides(m) <= 1 and 0 < m.mean() <= 0.6
           and (not scores or scores[i] >= 0.7 * top)]
     if ok:
         return ok[-1]
@@ -1091,15 +1085,13 @@ def segment_from_points(
     return _classical_point_masks(img, points, labels), [1.0], "classical component under the click"
 
 
-def suggest_object_point(image_input: Union[str, Path, Image.Image, np.ndarray, bytes],
-                         exclude: Optional[List[np.ndarray]] = None) -> Tuple[float, float]:
+def suggest_object_point(image_input: Union[str, Path, Image.Image, np.ndarray, bytes]) -> Tuple[float, float]:
     """A first guess at where the part is, for the user to confirm or correct.
 
     SAM is prompted at a 5 x 3 grid over the central half of the frame (one batched pass).
     Each grid point's default candidate is scored: central (+), touching image borders (-,
     backgrounds such as walls and whiteboards), skin-coloured (-, the hand holding the part),
-    tiny (< 0.3 %) or huge (> 40 %) (-), mostly one of the ``exclude`` regions (-, e.g. the
-    marker sheets, whose outline is known from their pose). Without SAM, the image centre.
+    tiny (< 0.3 %) or huge (> 40 %) (-). Without SAM, the image centre.
     """
     img = image_input if isinstance(image_input, Image.Image) else _load_image(image_input)
     w, h = img.size
@@ -1124,12 +1116,12 @@ def suggest_object_point(image_input: Union[str, Path, Image.Image, np.ndarray, 
         if not pairs:
             continue
         cands, sc = [p[0] for p in pairs], [p[1] for p in pairs]
-        m = cands[default_candidate(cands, sc, exclude)]
+        m = cands[default_candidate(cands, sc)]
         ys, xs = np.nonzero(m)
         centre = 1.0 - math.hypot(xs.mean() / w - 0.5, ys.mean() / h - 0.5) / math.hypot(0.5, 0.5)
         area = float(m.mean())
         score = (centre - 1.0 * _touched_sides(m) - 2.0 * _skin_fraction(rgb, m)
-                 - (1.0 if area < 0.003 or area > 0.4 else 0.0) - (3.0 if _overlaps(m, exclude) else 0.0))
+                 - (1.0 if area < 0.003 or area > 0.4 else 0.0))
         if score > best_score:
             best, best_score = (x, y), score
     return float(best[0]), float(best[1])
@@ -1214,8 +1206,6 @@ def analyze_image_object(
     points: Optional[List[Tuple[float, float]]] = None,
     labels: Optional[List[int]] = None,
     candidate: Optional[int] = None,
-    exclude: Optional[List[np.ndarray]] = None,
-    prior: Optional[np.ndarray] = None,
 ) -> CVAnalysisResult:
     """Analyze a photograph and return a part category, a clean mask and metric parameters.
 
@@ -1229,12 +1219,6 @@ def analyze_image_object(
                     not the part (label 0). They decide the object; nothing else does.
     candidate       Which of SAM's nested masks to use (0 = smallest); default: the largest
                     one that is not background-like (:func:`default_candidate`).
-    exclude         Regions that are known not to be the part (e.g. marker sheets, from their
-                    pose). Candidates that are mostly one of them are never chosen, and the
-                    plain-backdrop fast path is skipped (it would pick the sheet).
-    prior           Expected silhouette (e.g. the solid from the other views projected into
-                    this one). Without clicks it supplies the prompt point; among SAM's masks
-                    the one agreeing best with it (IoU) is chosen.
 
     Without clicks, a plain backdrop uses the classical mask; otherwise the object is
     *suggested* by :func:`suggest_object_point` and must be confirmed by the user (the app
@@ -1249,17 +1233,12 @@ def analyze_image_object(
     guessed = None
     if not points:
         classical, trusted, note = _classical_segment(img)
-        if trusted and use_models is not True and not exclude:
+        if trusted and use_models is not True:
             return _result_from_mask(img, classical, reference_scale,
                                      "classical (uniform backdrop; foundation models skipped)",
                                      notes=[f"Fast path: {note}"])
         if HAS_FOUNDATION and use_models is not False:
-            if prior is not None and prior.any():   # deepest point of the expected silhouette
-                dist = ndi.distance_transform_edt(prior)
-                gy, gx = np.unravel_index(int(np.argmax(dist)), dist.shape)
-                guess = (float(gx), float(gy))
-            else:
-                guess = suggest_object_point(img, exclude)
+            guess = suggest_object_point(img)
             try:
                 guessed = segment_from_points(img, [guess], [1])
                 points, labels = [guess], [1]
@@ -1272,13 +1251,8 @@ def analyze_image_object(
         masks, scores, how = guessed or segment_from_points(img, points, labels)
         if candidate is not None:
             idx = int(candidate) % len(masks)
-        elif prior is not None and prior.any():
-            fits = [-1.0 if _overlaps(m, exclude) else (m & prior).sum() / max(1, (m | prior).sum())
-                    for m in masks]
-            idx = int(np.argmax(fits))
-            notes.append(f"Mask chosen to agree with the other photos (IoU {fits[idx]:.2f}).")
         else:
-            idx = default_candidate(masks, scores, exclude)
+            idx = default_candidate(masks, scores)
         mask = masks[idx]
         det, detections = None, []
         if HAS_FOUNDATION and use_models is not False:

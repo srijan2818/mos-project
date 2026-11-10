@@ -1,3 +1,0 @@
-# Optional higher-quality background segmentation for Universal Image → 3D.
-# The base project already lists torch and transformers for the CV foundation models.
-rembg[cpu]>=2.0.60

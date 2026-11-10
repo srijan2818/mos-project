@@ -11,12 +11,13 @@
 | `mos/core/model.py` | `BC`, `LoadCase`, `Model` containers | none |
 | `mos/core/spec.py` | text model description: `parse_spec`, `build`, `make_mesh` | numpy (+ skfem to make meshes) |
 | `mos/core/solver.py` | scikit-fem assembly, constraints, solve, `Results`, `solve_case` | **scikit-fem** |
-| `mos/core/post.py` | strain/stress recovery, averaging, von Mises, principal values | numpy |
+| `mos/core/post.py` | strain/stress recovery (element-vertex values averaged per vertex), von Mises, principal values, proportional-limit utilisation | numpy (+ skfem for `vertex_values`) |
 | `mos/core/multiview.py` | multi-view capture validation, Nerfstudio/COLMAP reconstruction datasets, Gaussian PLY center extraction and metric scaling | numpy, scipy, Pillow; optional Nerfstudio/COLMAP |
 | `mos/core/meshes.py` | `box_mesh` | scikit-fem |
 | `mos/core/gmsh_session.py` | one process-wide Gmsh lock and thread-safe initialisation (no SIGINT handler) | gmsh |
 | `mos/core/cad.py` | STEP import; `gmsh_to_meshtet` (vectorised Gmsh -> `MeshTet` with named faces) | gmsh, scikit-fem |
 | `mos/core/image_to_mesh.py` | mask -> outline + holes -> layered tetrahedral extrusion (`mesh mask`) | gmsh, scikit-fem, Pillow |
+| `mos/core/multiview_hull.py` | three orthogonal photo outlines -> scale fit -> voxel hull -> marching cubes -> tetrahedral mesh (`mesh hull`) | numpy, scipy, scikit-image, gmsh, scikit-fem |
 | `mos/core/cv_detector.py` | photo -> part mask, category and template parameters | numpy, scipy, Pillow; optional torch/transformers |
 | `mos/viz.py` | result fields for plotting, deformation scale, clip plane, pyvista conversion | numpy (+ pyvista, meshio) |
 | `mos/templates.py` | example models for the app's menu | none |

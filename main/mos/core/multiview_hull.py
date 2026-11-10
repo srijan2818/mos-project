@@ -1,24 +1,44 @@
-"""Solid from several photos: visual hull carving on the marker mat -> tetrahedral FE mesh.
+"""Solid from three orthogonal photos (top, front, right side) -> tetrahedral FE mesh.
 
-Each view contributes a silhouette mask and a camera pose (``mos.core.marker``). A point of
-space belongs to the part only if it projects inside the part's mask in *every* view; the
-set of such points is the **visual hull**: the largest solid consistent with the silhouettes.
+Each photo contributes the part's silhouette. Treating each photo as an orthographic
+projection along its axis, a point belongs to the part only if it lies inside the silhouette
+in all three views: the solid is the intersection of the three extruded silhouettes (the
+**visual hull** of three orthogonal views). No printed markers are needed: the views are
+registered by their bounding boxes, and one dimension typed by the user sets the scale.
 
-What it can and cannot represent:
+Frame (z up): x = length (left -> right in the front photo), y = depth (front -> back),
+z = height. Image directions of the three photos:
 
-* exact for convex parts seen from enough directions; through-holes are kept when some view
-  looks through them;
-* concavities that never show in any silhouette (blind pockets, recessed faces) are filled in,
-  so the hull over-estimates volume and stiffness there;
-* with only three views, regions no view separates (e.g. edges between two viewing directions)
-  are over-estimated as well; more views (short video) tighten the hull.
+    front   camera in front, level      columns -> +x, rows (down) -> -z
+    top     camera above, front edge at the bottom of the photo
+                                        columns -> +x, rows (down) -> -y
+    side    camera on the right, level  columns -> +y, rows (down) -> -z
 
-Discretisation: the hull is carved on a voxel grid, then surfaced by marching cubes on a
-slightly smoothed occupancy. Boundary error is O(voxel size); ``resolution`` voxels span the
-part's largest extent. Units are metres throughout.
+Each axis is seen by two photos, which gives each photo's scale up to one common factor
+(:func:`fit_scales`); the third pairing is a consistency check.
 
-Coordinates: carving happens in the mat frame (z up). The returned FE mesh uses the app's
-convention, y up: ``(X, Y, Z) = (x, z, -y)`` (a proper rotation), table plane at Y = 0.
+What it can and cannot represent, and its errors:
+
+* exact (to the voxel size) for parts whose shape is an intersection of three extrusions
+  (blocks, brackets, plates with through-holes seen along an axis); concavities that no view
+  shows (blind pockets, recesses, anything only visible obliquely) are filled in, so volume and
+  stiffness are over-estimated there;
+* perspective: a phone photo is not orthographic. A magnification common to a whole photo
+  cancels (each photo's bounding box is rescaled, the typed dimension fixes the scale), so a
+  box comes out exact from any distance. Parts of one photo at different depths are
+  magnified differently, by a relative ~ (depth difference) / d at camera distance d.
+  Measured on an 80 x 30 x 50 mm L-bracket: d = 5x its size: extents <= 6 %, volume +7 %,
+  the 10 mm upright 12.5 mm thick; d = 10x: <= 3 %, +4 %. Shoot from far, zoomed in;
+* tilt: a view turned by theta from its axis adds about D sin(theta) of the depth to the width;
+* checking: the only reliable consistency check is the bounding-box proportions
+  (``size_mismatch``): an extra object or a hand in one photo changes its proportions.
+  Silhouette agreement (projecting the hull back into each photo) is *not* used: with three
+  orthogonal views the hull reproduces a view almost whenever the other two are solid
+  outlines, so a mirrored photo or a hand inside the outline usually still "agrees";
+* discretisation: the hull is carved on a voxel grid (``resolution`` voxels along the longest
+  side) and surfaced by marching cubes on a slightly smoothed occupancy: O(voxel) boundary error.
+
+The FE mesh uses the app's convention, y up: ``(X, Y, Z) = (x, z, -y)``, table at Y = 0.
 """
 from __future__ import annotations
 
@@ -31,29 +51,45 @@ from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
 from scipy import ndimage as ndi
 
-from .marker import CameraPose
-
 log = logging.getLogger(__name__)
 
-# mat frame (z up) -> app frame (y up); orthogonal, det = +1
+# hull frame (z up) -> app frame (y up); orthogonal, det = +1
 TO_APP = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]])
+
+# per photo: the world axes of (image columns, image rows); rows always run against the axis
+VIEW_AXES = {"front": ("x", "z"), "top": ("x", "y"), "side": ("y", "z")}
+AXES = "xyz"
+# Proportion disagreement worth a warning. Exact silhouettes measure ~1 % (bounding-box pixel
+# rounding); a camera at 5x the part size ~1-4 %; a hand or second object easily > 20 %.
+SIZE_MISMATCH_WARN = 0.05
 
 
 @dataclass
-class HullView:
-    """One photo: its name, the part's silhouette (H, W) and the camera that took it."""
+class OrthoView:
+    """One photo: which view it is, the part's silhouette (H, W) and how to orient it.
+
+    ``rot90`` quarter turns counter-clockwise, then ``flip_h`` mirrors left-right; both fix a
+    photo taken in portrait or from the wrong side without retaking it.
+    """
     name: str
     mask: np.ndarray
-    pose: CameraPose
+    axis: str                     # "front", "top" or "side"
+    flip_h: bool = False
+    rot90: int = 0
+
+    def oriented(self) -> np.ndarray:
+        """The mask after rotation and mirroring."""
+        m = np.rot90(np.asarray(self.mask, bool), int(self.rot90) % 4)
+        return m[:, ::-1] if self.flip_h else m
 
 
 @dataclass
 class Hull:
-    """Carved occupancy grid in the mat frame (voxel centres at origin + (i, j, k) * voxel)."""
+    """Carved occupancy grid (voxel centres at origin + (i, j, k) * voxel), hull frame."""
     occupied: np.ndarray
     origin: np.ndarray
     voxel: float
-    view_iou: Dict[str, float] = field(default_factory=dict)
+    size_mismatch: Optional[float] = None    # |e^r - 1| of the scale loop, see fit_scales
 
     @property
     def volume(self) -> float:
@@ -66,111 +102,98 @@ class Hull:
         return (idx.max(axis=0) - idx.min(axis=0) + 1) * self.voxel
 
 
-def _inside_all(views: List[HullView], P: np.ndarray) -> np.ndarray:
-    """For world points (N, 3): inside the mask, in front of the camera, in every view."""
-    keep = np.ones(len(P), bool)
-    for v in views:
-        x = P[keep] @ v.pose.R.T + v.pose.t
-        front = x[:, 2] > 1e-6
-        uv = x[:, :2] / np.where(front, x[:, 2], 1.0)[:, None] @ np.diag(v.pose.K[[0, 1], [0, 1]]) \
-            + v.pose.K[:2, 2]
-        u = np.floor(uv[:, 0]).astype(np.int64)
-        w = np.floor(uv[:, 1]).astype(np.int64)
-        h, wd = v.mask.shape
-        ok = front & (u >= 0) & (u < wd) & (w >= 0) & (w < h)
-        hit = np.zeros(len(x), bool)
-        hit[ok] = v.mask[w[ok], u[ok]]
-        sub = np.flatnonzero(keep)
-        keep[sub[~hit]] = False
-        if not keep.any():
-            break
-    return keep
+def crop_part(mask: np.ndarray) -> np.ndarray:
+    """Largest connected component of ``mask``, cropped to its bounding box."""
+    lab, n = ndi.label(np.asarray(mask, bool))
+    if n == 0:
+        raise ValueError("the mask is empty")
+    part = lab == 1 + int(np.argmax(np.bincount(lab.ravel())[1:]))
+    rows, cols = np.flatnonzero(part.any(axis=1)), np.flatnonzero(part.any(axis=0))
+    return part[rows[0]:rows[-1] + 1, cols[0]:cols[-1] + 1]
 
 
-def _grid(lo: np.ndarray, hi: np.ndarray, voxel: float):
-    """Voxel-centre coordinates (N, 3) and the grid shape covering [lo, hi]."""
-    n = np.maximum(1, np.ceil((hi - lo) / voxel).astype(int))
-    axes = [lo[i] + (np.arange(n[i]) + 0.5) * voxel for i in range(3)]
-    P = np.stack(np.meshgrid(*axes, indexing="ij"), axis=-1).reshape(-1, 3)
-    return P, tuple(n)
+def _by_axis(views: List[OrthoView]) -> Dict[str, np.ndarray]:
+    found = {v.axis: crop_part(v.oriented()) for v in views}
+    if sorted(found) != sorted(VIEW_AXES) or len(views) != 3:
+        raise ValueError("need exactly one top, one front and one side view")
+    return found
 
 
-def carve(views: List[HullView], resolution: int = 128, search_box=None) -> Hull:
-    """Visual hull of the part above the mat (z >= 0).
+def fit_scales(views: List[OrthoView], known_axis: str, known_m: float):
+    """Part size (m, along x, y, z) and each photo's scale (m/px) from the bounding boxes.
 
-    A coarse pass (48 voxels over ``search_box``) finds the part; a fine pass puts
-    ``resolution`` voxels across its largest extent. ``search_box`` = (lo, hi) in the mat
-    frame; default: the area around the cameras' common view, z from 0 up.
+    Each world axis spans ``n_a`` pixels in the two photos that see it, so their scales k
+    satisfy ``k_i n_i = k_j n_j``: three equations for three unknowns, one of which is the common
+    factor fixed by ``known_m`` (the true size along ``known_axis``). In logs the equations
+    form a cycle; least squares spreads its closure residual r equally over the three, and
+    ``|e^r - 1|`` (returned as ``mismatch``) is how much the three photos disagree about the
+    proportions: 0 for perfect orthographic silhouettes; perspective, tilt or a wrong
+    selection make it grow.
     """
-    if len(views) < 2:
-        raise ValueError("a solid needs at least two views; use three or more")
-    if search_box is None:
-        centres = np.array([v.pose.centre for v in views])
-        span = float(np.max(np.linalg.norm(centres - centres.mean(axis=0), axis=1))) + 0.05
-        mid = centres.mean(axis=0)
-        lo = np.array([mid[0] - span, mid[1] - span, 0.0])
-        hi = np.array([mid[0] + span, mid[1] + span, span])
-    else:
-        lo, hi = (np.asarray(b, float) for b in search_box)
-    coarse = float(np.max(hi - lo)) / 48.0
-    P, shape = _grid(lo, hi, coarse)
-    occ = _inside_all(views, P).reshape(shape)
-    if not occ.any():
-        raise ValueError("no point of space is inside every silhouette: check that each view's "
-                         "mask is the same part and that the mat was detected correctly")
-    idx = np.argwhere(occ)
-    flo = lo + (idx.min(axis=0) - 1.5) * coarse
-    fhi = lo + (idx.max(axis=0) + 2.5) * coarse
-    flo[2] = max(flo[2], 0.0)
-    voxel = float(np.max(fhi - flo)) / resolution
-    P, shape = _grid(flo, fhi, voxel)
-    occ = _inside_all(views, P).reshape(shape)
-    occ = ndi.binary_opening(occ, iterations=1) if occ.sum() > 64 else occ
-    labels, n = ndi.label(occ)
-    if n > 1:   # keep the part; carving leaves small ghost pieces where views barely overlap
-        occ = labels == 1 + int(np.argmax(np.bincount(labels.ravel())[1:]))
-    hull = Hull(occupied=occ, origin=flo + 0.5 * voxel, voxel=voxel)
-    hull.view_iou = view_consistency(views, hull)
-    return hull
+    if known_axis not in AXES or not (np.isfinite(known_m) and known_m > 0):
+        raise ValueError("known dimension: axis x, y or z and a positive length")
+    crops = _by_axis(views)
+    px = {name: dict(zip(VIEW_AXES[name], (m.shape[1], m.shape[0]))) for name, m in crops.items()}
+    names = list(VIEW_AXES)                       # unknowns: log scale of front, top, side
+    rows, rhs = [], []
+    for a in AXES:
+        i, j = [names.index(n) for n in names if a in VIEW_AXES[n]]
+        row = np.zeros(3)
+        row[i], row[j] = 1.0, -1.0                # log k_i - log k_j = log(n_j / n_i)
+        rows.append(row)
+        rhs.append(np.log(px[names[j]][a] / px[names[i]][a]))
+    A, b = np.array(rows), np.array(rhs)
+    l, *_ = np.linalg.lstsq(np.vstack([A, [1.0, 0.0, 0.0]]), np.r_[b, 0.0], rcond=None)
+    resid = A @ l - b
+    mismatch = float(abs(np.expm1(np.abs(resid).sum())))
+    k = dict(zip(names, np.exp(l)))
+    size = np.array([np.sqrt(np.prod([k[n] * px[n][a] for n in names if a in VIEW_AXES[n]]))
+                     for a in AXES])
+    g = known_m / size[AXES.index(known_axis)]
+    return size * g, {n: k[n] * g for n in names}, mismatch
 
 
-def view_consistency(views: List[HullView], hull: Hull) -> Dict[str, float]:
-    """IoU between each view's mask and the hull projected back into that view.
+def _sample(crop: np.ndarray, n_col: int, n_row: int) -> np.ndarray:
+    """Nearest-pixel resampling of a cropped silhouette onto (n_col, n_row) voxel columns
+    (columns along the first axis, rows flipped so index 0 is the axis minimum)."""
+    h, w = crop.shape
+    ci = np.minimum(((np.arange(n_col) + 0.5) * w / n_col).astype(int), w - 1)
+    ri = np.minimum(((np.arange(n_row) + 0.5) * h / n_row).astype(int), h - 1)
+    return crop[::-1][ri][:, ci].T
 
-    The hull is the intersection of all silhouette cones, so it can only *shrink* a correct
-    mask. A view whose mask is much larger than the reprojection (IoU well below 1) shows
-    something the other views rule out: usually the wrong object or a merged hand.
+
+def carve_ortho(views: List[OrthoView], known_axis: str = "x", known_m: float = 0.1,
+                resolution: int = 128) -> Hull:
+    """Intersection of the three extruded silhouettes; ``resolution`` voxels on the longest side.
+
+    Each silhouette's bounding box is stretched onto the common size from :func:`fit_scales`
+    (that registers the photos); ``size_mismatch`` reports how well the boxes agreed.
     """
-    out = {}
-    for v in views:
-        proj = project_hull(hull, v.pose)
-        out[v.name] = float((proj & v.mask).sum() / max(1, (proj | v.mask).sum()))
-    return out
-
-
-def project_hull(hull: Hull, pose: CameraPose) -> np.ndarray:
-    """(H, W) bool silhouette of the carved hull as seen by ``pose``."""
-    pts = hull.origin + np.argwhere(hull.occupied) * hull.voxel
-    x = pts @ pose.R.T + pose.t
-    x = x[x[:, 2] > 1e-6]
-    w, h = pose.image_size
-    proj = np.zeros((h, w), bool)
-    if not len(x):
-        return proj
-    uv = x[:, :2] / x[:, 2:3] @ np.diag(pose.K[[0, 1], [0, 1]]) + pose.K[:2, 2]
-    u = np.clip(np.round(uv[:, 0]).astype(int), 0, w - 1)
-    r = np.clip(np.round(uv[:, 1]).astype(int), 0, h - 1)
-    proj[r, u] = True
-    # voxel centres are sparse in the image: close the gaps of ~1 voxel's footprint
-    px = int(np.ceil(np.median(pose.K[0, 0] * hull.voxel / x[:, 2]))) + 1
-    proj = ndi.binary_closing(ndi.binary_dilation(proj, iterations=px), iterations=px)
-    return ndi.binary_erosion(proj, iterations=px)
+    size, _, mismatch = fit_scales(views, known_axis, known_m)
+    crops = _by_axis(views)
+    voxel = float(size.max()) / int(resolution)
+    n = np.maximum(1, np.round(size / voxel).astype(int))
+    nx, ny, nz = n
+    F = _sample(crops["front"], nx, nz)          # (x, z)
+    T = _sample(crops["top"], nx, ny)            # (x, y)
+    Sd = _sample(crops["side"], ny, nz)          # (y, z)
+    occ = T[:, :, None] & F[:, None, :] & Sd[None, :, :]
+    lab, k = ndi.label(occ)
+    if k == 0:
+        raise ValueError("no point is inside all three silhouettes")
+    if k > 1:   # keep the part; report what was cut away
+        sizes = np.bincount(lab.ravel())[1:]
+        occ = lab == 1 + int(np.argmax(sizes))
+        log.info("hull: dropped %d separate piece(s), %.1f %% of the volume",
+                 k - 1, 100.0 * (sizes.sum() - sizes.max()) / sizes.sum())
+    return Hull(occupied=occ, origin=np.full(3, 0.5 * voxel), voxel=voxel, size_mismatch=mismatch)
 
 
 def surface(hull: Hull, smooth_voxels: float = 1.0, step: int = 1) -> Tuple[np.ndarray, np.ndarray]:
-    """Closed triangle surface (vertices in the mat frame, faces) by marching cubes.
+    """Closed triangle surface (vertices in the hull frame, faces) by marching cubes.
 
-    ``step`` > 1 samples every step-th voxel: fewer, larger triangles (and tets).
+    ``step`` > 1 samples every step-th voxel: fewer, larger triangles. Gmsh could not fill such
+    surfaces at steps 3-4; for coarser meshes carve at a lower resolution instead.
     """
     from skimage.measure import marching_cubes
     field_ = np.pad(hull.occupied.astype(float), 2)
@@ -250,7 +273,7 @@ def mesh_surface(verts: np.ndarray, faces: np.ndarray):
     The marching-cubes triangles are kept as the boundary (a watertight, non-self-intersecting
     surface) and Gmsh fills the volume. Re-meshing the surface through Gmsh's
     classify/reparametrise step was tried first and failed on a real session ("a segment and a
-    facet intersect"); element size is set by the marching-cubes ``step`` instead (see
+    facet intersect"); element size is set by the carving resolution instead (see
     :func:`load_hull_mesh`). Faces are named by :func:`name_faces_by_normal`.
     """
     from skfem import MeshTet
@@ -278,42 +301,45 @@ def mesh_surface(verts: np.ndarray, faces: np.ndarray):
 
 
 # ----------------------------------------------------------------- sessions (spec directive)
-def save_session(directory: Union[str, Path], views: List[HullView]) -> Path:
-    """Write masks (PNG) and cameras (JSON) so ``mesh hull DIR`` can rebuild the solid."""
+def save_session(directory: Union[str, Path], views: List[OrthoView], known_axis: str,
+                 known_m: float) -> Path:
+    """Write masks (PNG) and ``ortho.json`` so ``mesh hull DIR`` can rebuild the solid."""
     from PIL import Image
     d = Path(directory)
     d.mkdir(parents=True, exist_ok=True)
     meta = []
     for v in views:
-        Image.fromarray(v.mask.astype(np.uint8) * 255).save(d / f"{v.name}_mask.png")
-        meta.append({"name": v.name, "K": v.pose.K.tolist(), "R": v.pose.R.tolist(),
-                     "t": v.pose.t.tolist(), "image_size": list(v.pose.image_size),
-                     "corners": v.pose.corners, "rms_px": v.pose.rms_px})
-    (d / "cameras.json").write_text(json.dumps({"views": meta}, indent=1))
+        Image.fromarray(np.asarray(v.mask, bool).astype(np.uint8) * 255).save(d / f"{v.name}_mask.png")
+        meta.append({"name": v.name, "axis": v.axis, "flip_h": bool(v.flip_h), "rot90": int(v.rot90)})
+    (d / "ortho.json").write_text(json.dumps({"views": meta, "known_axis": known_axis,
+                                              "known_m": float(known_m)}, indent=1))
     return d
 
 
-def load_session(directory: Union[str, Path]) -> List[HullView]:
-    """Views saved by :func:`save_session`."""
+def load_session(directory: Union[str, Path]):
+    """(views, known_axis, known_m) saved by :func:`save_session`."""
     from PIL import Image
     d = Path(directory)
-    meta = json.loads((d / "cameras.json").read_text())["views"]
-    return [HullView(m["name"], np.asarray(Image.open(d / f"{m['name']}_mask.png").convert("L")) > 127,
-                     CameraPose(np.array(m["K"]), np.array(m["R"]), np.array(m["t"]),
-                                tuple(m["image_size"]), m.get("corners", 0), m.get("rms_px", float("nan"))))
-            for m in meta]
+    meta = json.loads((d / "ortho.json").read_text())
+    views = [OrthoView(m["name"], np.asarray(Image.open(d / f"{m['name']}_mask.png").convert("L")) > 127,
+                       m["axis"], m.get("flip_h", False), m.get("rot90", 0)) for m in meta["views"]]
+    return views, meta["known_axis"], float(meta["known_m"])
 
 
 def load_hull_mesh(directory: Union[str, Path], mesh_size: Optional[float] = None,
                    resolution: int = 128):
     """Session directory -> carved hull -> tetrahedral mesh (the ``mesh hull`` directive)."""
-    views = load_session(directory)
-    hull = carve(views, resolution=resolution)
-    bad = {k: round(v, 2) for k, v in hull.view_iou.items() if v < 0.85}
-    if bad:
-        log.warning("views disagree with the hull (IoU < 0.85): %s - check those masks", bad)
-    # element size ~ marching-cubes triangles ~ 2 * step voxels; default ~ 1/15 of the part
-    target = float(mesh_size) if mesh_size and mesh_size > 0 else float(np.max(hull.extent())) / 15.0
-    step = int(np.clip(round(target / (2.0 * hull.voxel)), 1, 4))
-    verts, faces = surface(hull, step=step)
-    return mesh_surface(verts, faces)
+    views, axis, known = load_session(directory)
+    size, _, mismatch = fit_scales(views, axis, known)
+    if mismatch > SIZE_MISMATCH_WARN:
+        log.warning("the three photos disagree on the proportions by %.0f %%: check the masks",
+                    100 * mismatch)
+    # Element size ~ 2 voxels: carve at that resolution and surface every voxel. Marching cubes
+    # with step_size > 1 on a fine grid was tried first: at steps 3-4 Gmsh generated no
+    # tetrahedra inside its surface (60 x 40 x 30 mm box from the app, default size).
+    target = float(mesh_size) if mesh_size and mesh_size > 0 else float(size.max()) / 15.0
+    # Smoothing 0.5 voxel: measured on a 120 x 20 x 20 mm bar cantilever at the default size,
+    # tip deflection +5 % vs beam theory (1 voxel rounded the section's edges: +11 %); the
+    # rounded edges may then appear as extra small faces.
+    res = int(np.clip(round(2.0 * float(size.max()) / target), 24, resolution))
+    return mesh_surface(*surface(carve_ortho(views, axis, known, resolution=res), smooth_voxels=0.5))

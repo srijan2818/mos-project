@@ -87,64 +87,82 @@ Before interpreting a simulation, manually validate the reconstructed shape, sca
 material, supports and loads. A successful mesh or solver run does not validate the physical accuracy
 of a shape inferred from a single photograph.
 
-## Three-view solid on the L-shaped marker mat (real 3D)
+## 3-photo solid (real 3D, no markers)
 
-One photo has no depth and no hidden sides, so every single-image path above assumes them. With
-several photos whose camera poses are known, each silhouette removes all space outside it; what is
-left is the **visual hull**, the largest solid consistent with every photo.
+One photo has no depth and no hidden sides. Three photos along the part's axes do: treating each
+as an orthographic projection, a point belongs to the part only if it lies inside the outline in
+all three, so the solid is the **intersection of the three extruded outlines** (the visual hull of
+three orthogonal views, `mos/core/multiview_hull.py`).
 
-**Setup.** *Make marker sheets* writes `cad_models/_generated/marker_mat.pdf`: two A4 pages, FLOOR
-and BACK, each a 9 × 6 ChArUco board of 30 mm squares (`mos/core/marker.py`, disjoint marker ids).
-Print at 100 % and check a square with a ruler. Lay FLOOR flat under the part and stand BACK upright
-behind it along the far edge. Their exact relative placement doesn't matter: it is measured.
+**Photos** (any camera, any zoom, plain background):
 
-**Photos** (same camera and zoom):
+| photo | camera | image → | image ↑ |
+|---|---|---|---|
+| Front | level with the part, looking straight at it | length x | height z |
+| Top | straight down, the front edge at the bottom of the photo | length x | depth y (away) |
+| Right side | level, from the part's right | depth y (front → back) | height z |
 
-1. top, straight down;
-2. front at **table level**, turned ~20° to one side (a head-on sheet gives the least certain pose);
-3. side, ~20° above the table;
-4. a 3/4 view from above that shows **both** sheets (it locates BACK relative to FLOOR).
+In each photo *Select part* + *Accept* (click-to-select, as for a single photo). The panel then
+shows each accepted outline as it will be used, cropped and oriented, with its axes; *Flip* and
+*Rotate 90°* fix a photo taken from the other side or in portrait. Enter **one measured
+dimension** (ruler or caliper, along x, y or z) and *Build solid & solve FEA*.
 
-**Why the standing sheet.** A flat mat is not detected below ~15° elevation, and downward-looking
-photos leave the height poorly constrained. Measured on a 60 × 40 × 30 mm box with exact silhouettes:
+**Registration and scale.** No markers: each outline is cropped to its bounding box. Every axis
+is seen by two photos, so their scales `k` (m/px) satisfy `k_i n_i = k_j n_j` (`n` = pixels along
+that axis): three equations in three unknowns, one of which is the common factor fixed by the
+measured dimension (`fit_scales`). In logarithms the equations form a cycle; least squares spreads
+the closure residual `r` equally, and `|e^r − 1|` is reported as how far the photos **disagree on
+the proportions** (warning above 5 %). Each outline is then stretched onto the common size and the
+three are intersected on a grid of 128 voxels along the longest side.
 
-| setup | height | volume excess |
-|---|---|---|
-| flat mat, 3 photos at 35° | 53.5 mm | +38 % |
-| flat mat, 3 photos at 20° | 41.6 mm | +22 % |
-| L-mat, 4 photos as above | 30.7 mm | +7 % |
+**Checking a selection.** The proportion mismatch is the reliable check: a hand or a second
+object in one outline changes its proportions (the test case reads 66 %). Projecting the solid back
+into each photo (the agreement score of the earlier marker-mat method) is *not* used: with three
+orthogonal views the solid reproduces an outline almost whenever the other two are solid shapes,
+so a mirrored photo or a hand inside the outline usually still "agrees". A stepped block with its
+side photo mirrored gives a different, fully consistent solid (`tests/test_multiview_hull.py`),
+which is why the oriented outlines are shown for checking by eye.
 
-**Pipeline.** `marker.solve_rig` detects both sheets and estimates one focal length (principal point
-at the centre, no distortion). It locates BACK from the photo that sees both, then refines all
-poses, the BACK pose and the focal length jointly (least squares on every detected corner).
-
-Per photo, **Select part** opens it in the click-to-select preview. Both sheets' projected outlines
-are excluded (otherwise the mat is the most prominent "object"). Once two other photos are
-accepted, the solid they define, projected into this photo, picks the prompt point and the mask.
-`multiview_hull.carve` then carves coarse-to-fine (48 voxels to find the part, 128 across it) and
-reports each photo's **agreement**: IoU of its mask with the hull projected back into it. The hull
-can only shrink a correct mask, so agreement well below 1 means that mask shows something the
-others rule out (wrong object, hand); select that photo again.
-
-The surface comes from marching cubes on a lightly smoothed grid. Gmsh fills the volume directly on
-those triangles (re-meshing the surface failed on a real session). Faces `cad_face_N` are grown from
-boundary triangles whose normals stay within 35° of the face's mean. The session (masks +
-`cameras.json`) is saved under `cad_models/_generated/hull_sessions/` and solved through
+The surface comes from marching cubes on a lightly smoothed grid; Gmsh fills the volume directly on
+those triangles. Faces `cad_face_N` are grown from boundary triangles whose normals stay within 35°
+of the face's mean. The session (masks + `ortho.json` with orientation and the measured dimension)
+is saved under `cad_models/_generated/hull_sessions/` and solved through
 `mesh hull SESSION_DIR [mesh_size]`; the mesh is in metres, y up, table at y = 0.
 
-**Accuracy (synthetic, known geometry).**
+**Accuracy (synthetic silhouettes, known geometry).**
 
-* Poses: camera within 3 mm and 0.5° (flat mat); L-mat reprojection on the part < 2 px (~0.8 mm).
-* 60 × 40 × 30 mm box from estimated poses: 63.3 × 43.5 × 29.8 mm, volume +5 %.
-* In the browser, with SAM masks: 64 × 42 × 30 mm.
-* Plan dimensions run 5–7 % large in every setup: each camera's cone widens behind the part, so the
-  bottom edges are over-estimated. The error shrinks with camera distance.
-* A 120 × 20 × 20 mm bar cantilever: tip deflection 21.8 µm vs 20.6 µm (beam theory, true bar).
+* Orthographic photos, 60 × 40 × 30 mm box at three different zooms: size within one voxel
+  (~0.5 mm), volume within 3 %, scales recovered within 1 %, proportion mismatch ~1 % (pixel
+  rounding of the bounding boxes).
+* L-bracket (80 × 30 mm foot, 50 mm upright, 10 mm thick): volume −0.6 %.
+* **Perspective.** A magnification common to a whole photo cancels (bounding boxes are rescaled,
+  the measured dimension fixes the scale), so a box is exact even from close up. Parts of one
+  photo at different depths are magnified differently (relative error ~ depth difference /
+  distance). Pinhole renders of the L-bracket, camera at d × its largest size:
 
-**Limits.** Concavities that no photo shows (blind pockets, recessed faces) are filled in, so volume
-and stiffness are over-estimated there. A through-hole is kept only if some photo looks through it.
-Real photos (lighting, focus, a hand in view) still need measuring: a benchmark with
-caliper-measured parts is the next step.
+  | d | extents | volume | 10 mm upright |
+  |---|---|---|---|
+  | 3× | ≤ 11 % | +7.6 % | 13.8 mm |
+  | 5× | ≤ 6 % | +7.1 % | 12.5 mm |
+  | 10× | ≤ 3 % | +3.8 % | 11.3 mm |
+
+  Shoot from far and zoom in.
+* A 120 × 20 × 20 mm bar at the default element size (1/15 of the part): hull mesh
+  120.0 × 20.0 × 20.0 mm, cantilever tip deflection 21.6 µm vs 20.7 µm for a box mesh of the
+  same size and 20.6 µm from beam theory (+5 %: the smoothed surface rounds the section's edges).
+
+**Meshing.** For the FE mesh the hull is carved again at about two voxels per element (default
+element size 1/15 of the part, at least 24 voxels along the longest side) and surfaced by
+marching cubes on every voxel with 0.5-voxel smoothing. Surfacing a fine grid with marching-cubes
+steps of 3–4 instead left Gmsh unable to fill the surface (no tetrahedra; found in the browser
+test). Smoothing by a full voxel rounded the section's edges more (+11 % on the bar); 0.5 voxel
+can leave the rounded edges as extra small faces next to the six main ones.
+
+**Limits.** Exact (to the voxel) only for shapes that are an intersection of three extrusions:
+blocks, brackets, plates with through-holes seen along an axis. Concavities that no view shows
+(blind pockets, recesses, chamfers seen only obliquely) are filled in, so volume and stiffness are
+over-estimated there. A tilted photo adds about D sin θ of the depth to the width. Real phone
+photos (lighting, lens distortion, a hand in view) have not been benchmarked yet.
 
 ## Tests
 

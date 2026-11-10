@@ -6,6 +6,7 @@ so that  sigma_voigt = C @ eps_voigt.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 
 import numpy as np
 
@@ -25,10 +26,18 @@ def voigt_to_c4(C: np.ndarray) -> np.ndarray:
 
 @dataclass(frozen=True, eq=False)
 class Material:
-    """Linear elastic material: 6x6 stiffness `C` (Pa, Voigt order) and density `rho`."""
+    """Linear elastic material: 6x6 stiffness `C` (Pa, Voigt order) and density `rho`.
+
+    Optional proportional limits (Pa) bound the range where linear elasticity holds:
+    ``sigma_pl`` alone is checked against von Mises (ductile metals); with ``sigma_pl_c`` as
+    well, ``sigma_pl`` is the tension and ``sigma_pl_c`` the compression limit of the brittle
+    Coulomb-Mohr check (see ``post.utilisation``). None means no check.
+    """
 
     C: np.ndarray          # (6, 6) stiffness, Pa
     rho: float = 0.0       # density, kg/m^3 (used to build gravity-type body forces)
+    sigma_pl: Optional[float] = None     # proportional limit (tension / von Mises), Pa
+    sigma_pl_c: Optional[float] = None   # compression limit (selects Coulomb-Mohr), Pa
 
     def __post_init__(self):
         C = np.asarray(self.C, dtype=float)
@@ -42,6 +51,12 @@ class Material:
             raise ValueError("C must be symmetric")
         if np.linalg.eigvalsh(C).min() <= 0:
             raise ValueError("C must be positive definite")
+        for name in ("sigma_pl", "sigma_pl_c"):
+            v = getattr(self, name)
+            if v is not None and not (np.isfinite(v) and v > 0.0):
+                raise ValueError(f"{name} must be finite and positive")
+        if self.sigma_pl_c is not None and self.sigma_pl is None:
+            raise ValueError("sigma_pl_c (compression limit) needs sigma_pl (tension limit)")
         object.__setattr__(self, "C", C)
 
     @property
@@ -50,8 +65,10 @@ class Material:
         return voigt_to_c4(self.C)
 
     @classmethod
-    def isotropic(cls, E: float, nu: float, rho: float = 0.0) -> "Material":
-        """Isotropic material from Young's modulus E, Poisson ratio nu and density rho."""
+    def isotropic(cls, E: float, nu: float, rho: float = 0.0, sigma_pl: Optional[float] = None,
+                  sigma_pl_c: Optional[float] = None) -> "Material":
+        """Isotropic material from Young's modulus E, Poisson ratio nu, density rho and the
+        optional proportional limits (see the class docstring)."""
         if not np.isfinite(E) or E <= 0.0:
             raise ValueError("E must be finite and positive")
         if not -1.0 < nu < 0.5:
@@ -62,4 +79,4 @@ class Material:
         C[:3, :3] = lam
         C[range(3), range(3)] += 2 * mu
         C[range(3, 6), range(3, 6)] = mu
-        return cls(C, rho)
+        return cls(C, rho, sigma_pl, sigma_pl_c)

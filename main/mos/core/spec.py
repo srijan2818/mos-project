@@ -7,6 +7,7 @@ One directive per line, '#' starts a comment. Units are whatever you use consist
   mesh     box L H W nx ny nz [tet|hex]         beam along x, y,z centred on 0
   mesh     file PATH                            volume mesh via meshio (.msh .vtk .vtu .xdmf ...)
   material E = ..., nu = ..., rho = ...         isotropic; E, nu, rho also become params
+           [, sigma_pl = ...[, sigma_pl_c = ...]]  proportional limit(s), Pa (checked after solve)
 
   region   NAME nodes  <condition>              nodes where the condition holds
   region   NAME facets <condition>              boundary facets whose vertices all satisfy it
@@ -91,7 +92,7 @@ def _h_param(spec, rest, n):
     name = m.group(1)
     if name in RESERVED:
         raise SpecError(f"'{name}' is reserved")
-    if spec.material is not None and name in ("E", "nu", "rho"):
+    if spec.material is not None and name in ("E", "nu", "rho", "sigma_pl", "sigma_pl_c"):
         # The material is already built; a later value would change expressions only.
         raise SpecError(f"param {name} must come before the material line")
     spec.params[name] = eval_constant(m.group(2), **spec.params)
@@ -225,13 +226,17 @@ def _h_material(spec, rest, n):
     vals = {}
     for item in split_top_level(rest):
         m = re.fullmatch(r"(\w+)\s*=\s*(.+)", item)
-        if not m or m.group(1) not in ("E", "nu", "rho"):
-            raise SpecError("material E = ..., nu = ..., rho = ...")
+        if not m or m.group(1) not in ("E", "nu", "rho", "sigma_pl", "sigma_pl_c"):
+            raise SpecError("material E = ..., nu = ..., rho = ...[, sigma_pl = ...[, sigma_pl_c = ...]]")
         vals[m.group(1)] = eval_constant(m.group(2), **spec.params)
     if "E" not in vals or "nu" not in vals:
         raise SpecError("material needs at least E and nu")
     vals.setdefault("rho", 0.0)
-    spec.material = Material.isotropic(vals["E"], vals["nu"], vals["rho"])
+    try:
+        spec.material = Material.isotropic(vals["E"], vals["nu"], vals["rho"],
+                                           vals.get("sigma_pl"), vals.get("sigma_pl_c"))
+    except ValueError as exc:
+        raise SpecError(f"material: {exc}") from exc
     spec.params.update(vals)
 
 

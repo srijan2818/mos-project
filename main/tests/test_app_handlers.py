@@ -103,6 +103,55 @@ def test_material_preset_sets_constants(env):
     assert float(s.mat_rho) == pytest.approx(2700, rel=0.05)
 
 
+def test_material_preset_sets_proportional_limits(env):
+    s = env.state
+    s.mat_preset = "Concrete"
+    s.fire("mat_preset")
+    assert s.mat_brittle and float(s.mat_spl) == pytest.approx(3) and float(s.mat_splc) == pytest.approx(12)
+    s.mat_preset = "Steel"
+    s.fire("mat_preset")
+    assert not s.mat_brittle and float(s.mat_spl) == pytest.approx(250) and s.mat_splc == ""
+
+
+def _solve_with_limit(env, spl, splc="", brittle=False):
+    s, c = env.state, env.ctrl
+    _box_interactive(s)
+    s.mat_spl, s.mat_splc, s.mat_brittle = spl, splc, brittle
+    c.run_solve()
+    assert s.status_type == "success", s.status
+    return env.solved_models[-1].material
+
+
+def test_limit_check_flags_nodes_and_opens_the_dialog(env):
+    from mos.core import post
+    s = env.state
+    mat = _solve_with_limit(env, "0.5")                  # synthetic stresses are ~1 MPa
+    assert mat.sigma_pl == pytest.approx(0.5e6) and mat.sigma_pl_c is None
+    U = post.von_mises(env.res.sig_nodal) / 0.5e6
+    assert s.limit_count == int((U >= 1).sum()) > 0 and s.limit_dialog
+    assert f"{1 / U.max():.3g} × the applied loads" in s.limit_text
+    assert "Proportional limit exceeded" in s.analysis_result_warning
+    assert "Utilisation (σ/σ_pl)" in s.field_items
+
+
+def test_limit_check_quiet_below_the_limit_and_without_one(env):
+    s = env.state
+    _solve_with_limit(env, "250")
+    assert s.limit_count == 0 and not s.limit_dialog and s.analysis_result_warning == ""
+    mat = _solve_with_limit(env, "")
+    assert mat.sigma_pl is None and "Utilisation (σ/σ_pl)" not in s.field_items
+
+
+def test_brittle_limit_uses_coulomb_mohr_and_needs_both_limits(env):
+    s, c = env.state, env.ctrl
+    mat = _solve_with_limit(env, "0.2", "5", brittle=True)
+    assert mat.sigma_pl_c == pytest.approx(5e6) and s.limit_count > 0
+    assert "Coulomb–Mohr" in s.limit_text
+    s.mat_splc = ""
+    c.run_solve()
+    assert s.status_type == "error" and "compression limit" in s.status, s.status
+
+
 def test_point_pressure_is_rejected_not_dropped(env):
     s, c = env.state, env.ctrl
     _box_interactive(s)
@@ -456,37 +505,28 @@ def test_click_select_flow_and_accept_gate(env):
     assert not s.cv_mask_accepted
 
 
-def test_three_view_flow_builds_a_hull_session_and_solves(env, tmp_path):
-    """4 synthetic L-mat photos -> marker poses -> per-photo accepted masks -> hull -> solve."""
-    pytest.importorskip("cv2")
-    pytest.importorskip("skimage")
+def test_three_photo_flow_builds_a_hull_session_and_solves(env):
+    """3 synthetic photos (front/top/side) -> accepted outlines -> orientation -> hull -> solve."""
     import base64
     import io
     from PIL import Image
-    from mos.core.marker import BACK, FLOOR
+    from mos.core.cv_detector import CVAnalysisResult
     from tests import synthetic_views as sv
     s, c, app = env.state, env.ctrl, env.app
-    lo, hi = np.array([0.105, -0.11, 0.0]), np.array([0.165, -0.07, 0.03])
-    cams = list(sv.lmat_views((lo + hi) / 2).values())
+    box = [(np.zeros(3), np.array([0.060, 0.040, 0.030]))]
     masks = {}
-    for k, (R, t) in enumerate(cams):
-        img = sv.render_lmat(R, t, FLOOR, BACK, sv.back_sheet_pose(BACK))
-        m = sv.box_mask(lo, hi, R, t)
-        img = np.where(m, 60, img).astype(np.uint8)            # the part, drawn over the mat
+    for k, (name, m) in enumerate(sv.three_masks(box, [0.03, 0.02, 0.015], (3000.0, 2500.0, 3500.0)).items()):
+        assert name == app.ORTHO_VIEWS[k]["axis"]
+        if name == "side":
+            m = np.rot90(m, -1)                                  # taken in portrait
         buf = io.BytesIO()
-        Image.fromarray(img).convert("RGB").save(buf, "PNG")
+        Image.fromarray(np.where(m, 60, 200).astype(np.uint8)).convert("RGB").save(buf, "PNG")
         url = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
         setattr(s, f"mv3_img_{k}", url)
+        s.fire(f"mv3_img_{k}")
         masks[url] = m
-    s.fire("mv3_img_0")
-    from mos.core.cv_detector import CVAnalysisResult
 
-    priors = []
-
-    def fake(src, reference_scale=0.3, points=None, labels=None, candidate=None, exclude=None,
-             prior=None):
-        assert exclude and len(exclude) == 2, "the sheets' outlines must be excluded"
-        priors.append(prior is not None)
+    def fake(src, reference_scale=0.3, points=None, labels=None, candidate=None):
         m = masks[src]
         return CVAnalysisResult(object_type=None, friendly_name="Unclassified outline", confidence=0.0,
                                 detected_features=[], parameters={}, pixel_dimensions=m.shape[::-1],
@@ -494,22 +534,30 @@ def test_three_view_flow_builds_a_hull_session_and_solves(env, tmp_path):
                                 prompt_points=[(1.0, 1.0, 1)], candidate_index=0, n_candidates=1)
     app.analyze_image_object = fake
     c.mv3_build_and_solve()
-    assert "marker mat first" in s.mv3_msg
-    c.mv3_check_mat()
-    assert s.mv3_rig_ok, s.mv3_msg
-    assert s.mv3_pose_info[1] and "corners" in s.mv3_pose_info[1]
-    for k in range(4):
+    assert "all three photos" in s.mv3_msg
+    for k in range(3):
         c.mv3_select(k)
         assert s.mv3_active == k and s.cv_mask_ready
         c.accept_cv_mask()
+        assert s.mv3_outline[k].startswith("data:image/png;base64,")
     assert all(s.mv3_mask_ok)
-    assert priors == [False, False, True, True]     # from the 3rd photo, the others guide it
     c.mv3_build_and_solve()
-    assert "Solid" in s.mv3_msg and "Agreement" in s.mv3_msg, s.mv3_msg
+    assert "measured dimension" in s.mv3_msg
+    s.mv3_known_axis, s.mv3_known_mm = "x", "60"
+    c.mv3_build_and_solve()
+    assert "disagree" in s.mv3_msg, s.mv3_msg                   # side photo still rotated
+    c.mv3_orient(2, "rot")
+    assert s.mv3_rot == [0, 0, 1]
+    c.mv3_build_and_solve()
+    import re
+    dims = [float(v) for v in re.search(r"Solid ([\d.]+) × ([\d.]+) × ([\d.]+) mm", s.mv3_msg).groups()]
+    assert dims == pytest.approx([60, 40, 30], abs=0.5) and "disagree" not in s.mv3_msg, s.mv3_msg  # 1 voxel
     assert "mesh     hull" in s.spec_text and s.cv_mesh_source == "hull"
     from mos.core.multiview_hull import load_session
-    assert len(load_session(s.mv3_session)) == 4
-    # replacing a photo invalidates its mask and the poses
-    s.mv3_img_2 = s.mv3_img_0
-    s.fire("mv3_img_2")
-    assert not s.mv3_rig_ok and s.mv3_mask_ok == [True, True, False, True]
+    views, axis, known = load_session(s.mv3_session)
+    assert [v.axis for v in views] == ["front", "top", "side"] and views[2].rot90 == 1
+    assert axis == "x" and known == pytest.approx(0.060)
+    # replacing a photo drops its outline only
+    s.mv3_img_1 = s.mv3_img_0
+    s.fire("mv3_img_1")
+    assert s.mv3_mask_ok == [True, False, True] and s.mv3_outline[1] == ""

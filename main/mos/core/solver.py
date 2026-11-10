@@ -480,8 +480,8 @@ class Results:
     equilibrium_error  maximum of relative resultant force and moment residuals
     eps_q, sig_q       strain / stress tensors at quadrature points, (3, 3, nel, nqp)
     eps_cell, sig_cell quadrature-weighted cell averages, (3, 3, nel)
-    eps_nodal, sig_nodal  volume-weighted averages of the cell values at vertices, (3, 3, nn);
-                       smooth, for plotting (peaks are underestimated, see docs/theory.md)
+    eps_nodal, sig_nodal  each element's strain/stress evaluated at its own vertices, then
+                       volume-weighted averaged per vertex, (3, 3, nn) (see docs/theory.md)
     """
 
     basis: object
@@ -494,7 +494,7 @@ class Results:
     sig_q: np.ndarray           # (3, 3, nel, nqp) stress at quadrature points
     eps_cell: np.ndarray        # (3, 3, nel)
     sig_cell: np.ndarray
-    eps_nodal: np.ndarray       # (3, 3, nnodes) smoothed, for plotting
+    eps_nodal: np.ndarray       # (3, 3, nnodes) element-vertex values averaged per vertex
     sig_nodal: np.ndarray
     applied_moment: np.ndarray = field(default_factory=lambda: np.zeros(3))
     reaction_moment: np.ndarray = field(default_factory=lambda: np.zeros(3))
@@ -514,6 +514,14 @@ class Results:
         """Principal stresses (values, vectors) at 'nodal', 'cell' or 'q' points."""
         return post.principal({"nodal": self.sig_nodal, "cell": self.sig_cell,
                                "q": self.sig_q}[where])
+
+    def utilisation(self, material, where="nodal"):
+        """Fraction of ``material``'s proportional limit used (see post.utilisation), or None
+        when the material has no limit."""
+        if material.sigma_pl is None:
+            return None
+        sig = {"nodal": self.sig_nodal, "cell": self.sig_cell, "q": self.sig_q}[where]
+        return post.utilisation(sig, material.sigma_pl, material.sigma_pl_c)
 
     def stress_at_point(self, xyz, points, where="nodal"):
         """Stress tensor (3,3) at spatial point xyz (nearest node in `where` field)."""
@@ -617,6 +625,7 @@ def solve_case(model: Model, case: LoadCase, order: int = 2) -> Results:
     err = max(force_error, moment_error)
 
     eps_q, sig_q = post.strain_stress_q(basis, u, C4)
+    eps_v, sig_v = post.vertex_values(basis, u, C4)
     dx = np.asarray(basis.dx)
     eps_c, sig_c = post.cell_average(eps_q, dx), post.cell_average(sig_q, dx)
     mesh, nn = model.mesh, model.mesh.p.shape[1]
@@ -625,8 +634,8 @@ def solve_case(model: Model, case: LoadCase, order: int = 2) -> Results:
         basis=basis, u=u, u_nodal=u[np.asarray(basis.nodal_dofs)],
         reactions=reactions, applied=applied, equilibrium_error=float(err),
         eps_q=eps_q, sig_q=sig_q, eps_cell=eps_c, sig_cell=sig_c,
-        eps_nodal=post.nodal_average(eps_c, mesh.t, vol, nn),
-        sig_nodal=post.nodal_average(sig_c, mesh.t, vol, nn),
+        eps_nodal=post.vertex_average(eps_v, mesh.t, vol, nn),
+        sig_nodal=post.vertex_average(sig_v, mesh.t, vol, nn),
         applied_moment=applied_moment, reaction_moment=reaction_moment,
         inertial_force=inertial_force, inertial_moment=inertial_moment,
         translational_acceleration=acceleration, angular_acceleration=angular_acceleration,
@@ -737,6 +746,7 @@ class CachedLinearSolver:
         err = max(force_error, moment_error)
 
         eps_q, sig_q = post.strain_stress_q(basis, u, self.C4)
+        eps_v, sig_v = post.vertex_values(basis, u, self.C4)
         dx = np.asarray(basis.dx)
         eps_c, sig_c = post.cell_average(eps_q, dx), post.cell_average(sig_q, dx)
         mesh, nn = model.mesh, model.mesh.p.shape[1]
@@ -745,8 +755,8 @@ class CachedLinearSolver:
             basis=basis, u=u, u_nodal=u[np.asarray(basis.nodal_dofs)],
             reactions=reactions, applied=applied, equilibrium_error=float(err),
             eps_q=eps_q, sig_q=sig_q, eps_cell=eps_c, sig_cell=sig_c,
-            eps_nodal=post.nodal_average(eps_c, mesh.t, vol, nn),
-            sig_nodal=post.nodal_average(sig_c, mesh.t, vol, nn),
+            eps_nodal=post.vertex_average(eps_v, mesh.t, vol, nn),
+            sig_nodal=post.vertex_average(sig_v, mesh.t, vol, nn),
             applied_moment=applied_moment, reaction_moment=reaction_moment,
             inertial_force=zeros.copy(), inertial_moment=zeros.copy(),
             translational_acceleration=zeros.copy(), angular_acceleration=zeros.copy(),

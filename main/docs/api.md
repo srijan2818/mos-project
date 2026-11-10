@@ -80,15 +80,21 @@ Expand a 6x6 Voigt matrix into the 3x3x3x3 tensor C_ijkl (sigma_ij = C_ijkl eps_
 
 Linear elastic material: 6x6 stiffness `C` (Pa, Voigt order) and density `rho`.
 
-Fields: `C: np.ndarray`, `rho: float = 0.0`
+Optional proportional limits (Pa) bound the range where linear elasticity holds:
+``sigma_pl`` alone is checked against von Mises (ductile metals); with ``sigma_pl_c`` as
+well, ``sigma_pl`` is the tension and ``sigma_pl_c`` the compression limit of the brittle
+Coulomb-Mohr check (see ``post.utilisation``). None means no check.
+
+Fields: `C: np.ndarray`, `rho: float = 0.0`, `sigma_pl: Optional[float] = None`, `sigma_pl_c: Optional[float] = None`
 
 #### `Material.C4() -> np.ndarray`  _(@property)_
 
 The 3x3x3x3 tensor form of C (sigma_ij = C4_ijkl eps_kl).
 
-#### `Material.isotropic(E: float, nu: float, rho: float=0.0) -> 'Material'`  _(@classmethod)_
+#### `Material.isotropic(E: float, nu: float, rho: float=0.0, sigma_pl: Optional[float]=None, sigma_pl_c: Optional[float]=None) -> 'Material'`  _(@classmethod)_
 
-Isotropic material from Young's modulus E, Poisson ratio nu and density rho.
+Isotropic material from Young's modulus E, Poisson ratio nu, density rho and the
+optional proportional limits (see the class docstring).
 
 ## `mos.core.regions`
 
@@ -253,6 +259,7 @@ One directive per line, '#' starts a comment. Units are whatever you use consist
   mesh     box L H W nx ny nz [tet|hex]         beam along x, y,z centred on 0
   mesh     file PATH                            volume mesh via meshio (.msh .vtk .vtu .xdmf ...)
   material E = ..., nu = ..., rho = ...         isotropic; E, nu, rho also become params
+           [, sigma_pl = ...[, sigma_pl_c = ...]]  proportional limit(s), Pa (checked after solve)
 
   region   NAME nodes  <condition>              nodes where the condition holds
   region   NAME facets <condition>              boundary facets whose vertices all satisfy it
@@ -412,8 +419,8 @@ translational_acceleration, angular_acceleration  Newton-Euler acceleration used
 equilibrium_error  maximum of relative resultant force and moment residuals
 eps_q, sig_q       strain / stress tensors at quadrature points, (3, 3, nel, nqp)
 eps_cell, sig_cell quadrature-weighted cell averages, (3, 3, nel)
-eps_nodal, sig_nodal  volume-weighted averages of the cell values at vertices, (3, 3, nn);
-                   smooth, for plotting (peaks are underestimated, see docs/theory.md)
+eps_nodal, sig_nodal  each element's strain/stress evaluated at its own vertices, then
+                   volume-weighted averaged per vertex, (3, 3, nn) (see docs/theory.md)
 ```
 
 Fields: `basis: object`, `u: np.ndarray`, `u_nodal: np.ndarray`, `reactions: np.ndarray`, `applied: np.ndarray`, `equilibrium_error: float`, `eps_q: np.ndarray`, `sig_q: np.ndarray`, `eps_cell: np.ndarray`, `sig_cell: np.ndarray`, `eps_nodal: np.ndarray`, `sig_nodal: np.ndarray`, `applied_moment: np.ndarray = field(default_factory=lambda: np.zeros(3))`, `reaction_moment: np.ndarray = field(default_factory=lambda: np.zeros(3))`, `inertial_force: np.ndarray = field(default_factory=lambda: np.zeros(3))`, `inertial_moment: np.ndarray = field(default_factory=lambda: np.zeros(3))`, `translational_acceleration: np.ndarray = field(default_factory=lambda: np.zeros(3))`, `angular_acceleration: np.ndarray = field(default_factory=lambda: np.zeros(3))`, `moment_equilibrium_error: float = 0.0`, `body_fixed_frame: bool = False`
@@ -425,6 +432,11 @@ Von Mises stress at 'nodal' (smoothed), 'cell' (averaged) or 'q' (quadrature) po
 #### `Results.principal(where='nodal')`
 
 Principal stresses (values, vectors) at 'nodal', 'cell' or 'q' points.
+
+#### `Results.utilisation(material, where='nodal')`
+
+Fraction of ``material``'s proportional limit used (see post.utilisation), or None
+when the material has no limit.
 
 #### `Results.stress_at_point(xyz, points, where='nodal')`
 
@@ -517,8 +529,26 @@ Quadrature-weighted average per cell: (3,3,nel,nqp) -> (3,3,nel).
 
 ### `nodal_average(Tc, t, vol, nnodes)`
 
-Volume-weighted average of cell values onto vertices (for smooth plots).
+Volume-weighted average of cell values onto vertices.
 Tc: (..., nel); t: (nverts_per_cell, nel) connectivity; vol: (nel,).
+
+### `vertex_values(basis, u, C4)`
+
+Strain and stress evaluated inside each element at its own vertices: (3, 3, nel, nverts).
+
+The quadrature points of a copy of ``basis`` are put at the reference vertices
+(``mesh.refdom.p``, same order as the rows of ``mesh.t``). For P2/Q2 the stress is linear /
+bilinear inside an element, so this is exact per element; the jump between elements is the
+discretisation error.
+
+### `vertex_average(Tv, t, vol, nnodes)`
+
+Volume-weighted average of element-vertex values onto mesh vertices.
+
+Tv: (..., nel, nverts) from :func:`vertex_values`; t: (nverts, nel); vol: (nel,).
+Unlike :func:`nodal_average` of cell means this keeps the linear variation inside each
+element: on the default 20 x 2 x 2 cantilever the mid-span surface stress is within ~1 %
+of beam theory instead of -41 %.
 
 ### `von_mises(S)`
 
@@ -528,6 +558,21 @@ Von Mises equivalent stress of a tensor field S with shape (3, 3, ...).
 
 Principal values s1 >= s2 >= s3, shape (3, ...); vectors shape (3, 3, ...)
 with vectors[:, k] the direction of s_{k+1}.
+
+### `utilisation(S, sigma_pl, sigma_pl_c=None)`
+
+```text
+Fraction of the proportional limit used, per point, for stresses S (3, 3, ...).
+
+* ``sigma_pl_c`` is None (ductile): von Mises, ``U = sigma_vM / sigma_pl``.
+* ``sigma_pl_c`` given (brittle Coulomb-Mohr, tension limit St = ``sigma_pl``, compression
+  limit Sc = ``sigma_pl_c``): ``U = max(s1, 0) / St + max(-s3, 0) / Sc``. This is s1/St in
+  pure tension, -s3/Sc in pure compression and s1/St - s3/Sc in mixed states (pure shear
+  fails at tau = St Sc / (St + Sc)).
+
+Both are positively homogeneous of degree 1 in S, so in a linear solve all loads may be
+scaled by ``1 / max(U)`` before any point reaches U = 1.
+```
 
 ### `tresca(S)`
 
@@ -724,151 +769,70 @@ silhouette extrusion and is intentionally separate from the relief preview.
 ``object_width_m`` only sets approximate scene scale; monocular depth is not
 metric depth.
 
-## `mos.core.marker`
-
-Printed ChArUco marker mat: camera pose and metric scale for multi-view reconstruction.
-
-The part stands on the printed mat. Every photo that sees enough of the mat gets its camera
-pose in a common world frame, in metres, so no structure-from-motion and no "assumed size"
-are needed.
-
-World frame: origin at the mat's printed top-left corner. OpenCV's board frame has x to the
-right, y down the page and z into the table; the world frame flips y and z so that ``z``
-points **up out of the table** (x right, y up the page): ``P_world = F @ P_board`` with
-``F = diag(1, -1, -1)``. The mat therefore lies in the plane z = 0 with y <= 0.
-
-Accuracy depends on printing at 100 % ("actual size"); measure one square after printing and
-pass the measured size as ``square_m`` if it differs.
-
-**L-mat.** A flat mat alone only allows downward-looking photos (below ~15 deg elevation the mat
-is no longer detected), and then the part's height is badly over-estimated (+40 % on a test box
-at 20 deg). A second sheet standing behind the part (``BACK``, its own marker ids) is seen
-face-on by a camera at table level. Its pose relative to the floor sheet is estimated from
-any photo that sees both (:func:`solve_rig`), so the two sheets need no precise placement.
-
-### class `BoardSpec`  _(@dataclass(frozen=True))_
-
-Geometry of the printed mat (defaults fit A4 landscape with ~14 mm margins).
-
-Fields: `squares: Tuple[int, int] = (9, 6)`, `square_m: float = 0.03`, `marker_m: float = 0.022`, `dictionary: str = 'DICT_5X5_100'`, `first_id: int = 0`, `label: str = 'FLOOR'`
-
-#### `BoardSpec.n_markers() -> int`  _(@property)_
-
-ArUco markers on the board (the white squares of the chessboard).
-
-#### `BoardSpec.size_m() -> Tuple[float, float]`  _(@property)_
-
-Printed board width and height in metres.
-
-### class `CameraPose`  _(@dataclass)_
-
-Pinhole camera seeing the mat: ``x_cam = R @ X_world + t``, pixels ``~ K @ x_cam``.
-
-Fields: `K: np.ndarray`, `R: np.ndarray`, `t: np.ndarray`, `image_size: Tuple[int, int]`, `corners: int = 0`, `rms_px: float = float('nan')`
-
-#### `CameraPose.centre() -> np.ndarray`  _(@property)_
-
-Camera position in world coordinates (m).
-
-#### `CameraPose.elevation_deg() -> float`
-
-Angle of the viewing direction below the table plane (90 = straight down).
-
-### `make_board(spec: BoardSpec=BoardSpec())`
-
-The OpenCV ChArUco board for ``spec``.
-
-### `board_image(spec: BoardSpec=BoardSpec(), px_per_mm: float=300 / 25.4) -> np.ndarray`
-
-The mat as a grayscale image covering exactly the board (no margin).
-
-### `board_pdf(path: Union[str, Path], specs=(FLOOR, BACK)) -> Path`
-
-A4-landscape PDF, one page per sheet, 300 dpi. Print at 100 % / actual size.
-
-### `detect(image: np.ndarray, spec: BoardSpec=BoardSpec(), min_corners: int=8) -> Tuple[np.ndarray, np.ndarray]`
-
-ChArUco corners in an RGB/gray image: (world points (N, 3) in m, image points (N, 2)).
-
-Raises ValueError when fewer than ``min_corners`` corners are found (mat not visible
-enough for a pose).
-
-### `calibrate_focal(detections: List[Tuple[np.ndarray, np.ndarray]], image_size) -> np.ndarray`
-
-Intrinsics from the views themselves: one focal length, principal point at the centre,
-no lens distortion. Few, mostly oblique views constrain these 1-2 numbers well; the full
-distortion model would be over-fitted. Falls back to a typical field of view if the
-estimate is implausible (e.g. only fronto-parallel views, where f and distance trade off).
-
-### `solve_pose(world: np.ndarray, image_pts: np.ndarray, K: np.ndarray, image_size) -> CameraPose`
-
-Camera pose from the mat corners (iterative PnP; planar target).
-
-### class `Rig`  _(@dataclass)_
-
-Result of :func:`solve_rig`: a pose per photo (None if no sheet seen) and the back sheet.
-
-Fields: `poses: List[Optional[CameraPose]]`, `back_to_world: Optional[np.ndarray]`, `messages: List[str]`
-
-### `solve_rig(images: List[np.ndarray], floor: BoardSpec=FLOOR, back: BoardSpec=BACK) -> Rig`
-
-```text
-Poses of all photos on an L-mat (floor sheet + standing back sheet).
-
-1. Detect each sheet in each photo; one shared focal length from all detections.
-2. The back sheet's pose in the world: from the photo that sees both sheets with the most
-   corners (a photo must show both, e.g. a 3/4 view from above).
-3. Each photo's pose from the corners of every sheet it sees, in world coordinates.
-```
-
-### `sheet_mask(pose: CameraPose, spec: BoardSpec=FLOOR, sheet_to_world: Optional[np.ndarray]=None) -> np.ndarray`
-
-(H, W) bool: where the sheet ``spec`` (placed by ``sheet_to_world``, default the floor)
-appears in this photo. Used to stop the part selection from picking the mat itself.
-
-### `poses_from_images(images: List[np.ndarray], spec: BoardSpec=BoardSpec()) -> List[CameraPose]`
-
-Detect the mat in every image, estimate one shared focal length, return each pose.
-
-All images must come from the same camera at the same zoom (one session).
-
 ## `mos.core.multiview_hull`
 
 ```text
-Solid from several photos: visual hull carving on the marker mat -> tetrahedral FE mesh.
+Solid from three orthogonal photos (top, front, right side) -> tetrahedral FE mesh.
 
-Each view contributes a silhouette mask and a camera pose (``mos.core.marker``). A point of
-space belongs to the part only if it projects inside the part's mask in *every* view; the
-set of such points is the **visual hull**: the largest solid consistent with the silhouettes.
+Each photo contributes the part's silhouette. Treating each photo as an orthographic
+projection along its axis, a point belongs to the part only if it lies inside the silhouette
+in all three views: the solid is the intersection of the three extruded silhouettes (the
+**visual hull** of three orthogonal views). No printed markers are needed: the views are
+registered by their bounding boxes, and one dimension typed by the user sets the scale.
 
-What it can and cannot represent:
+Frame (z up): x = length (left -> right in the front photo), y = depth (front -> back),
+z = height. Image directions of the three photos:
 
-* exact for convex parts seen from enough directions; through-holes are kept when some view
-  looks through them;
-* concavities that never show in any silhouette (blind pockets, recessed faces) are filled in,
-  so the hull over-estimates volume and stiffness there;
-* with only three views, regions no view separates (e.g. edges between two viewing directions)
-  are over-estimated as well; more views (short video) tighten the hull.
+    front   camera in front, level      columns -> +x, rows (down) -> -z
+    top     camera above, front edge at the bottom of the photo
+                                        columns -> +x, rows (down) -> -y
+    side    camera on the right, level  columns -> +y, rows (down) -> -z
 
-Discretisation: the hull is carved on a voxel grid, then surfaced by marching cubes on a
-slightly smoothed occupancy. Boundary error is O(voxel size); ``resolution`` voxels span the
-part's largest extent. Units are metres throughout.
+Each axis is seen by two photos, which gives each photo's scale up to one common factor
+(:func:`fit_scales`); the third pairing is a consistency check.
 
-Coordinates: carving happens in the mat frame (z up). The returned FE mesh uses the app's
-convention, y up: ``(X, Y, Z) = (x, z, -y)`` (a proper rotation), table plane at Y = 0.
+What it can and cannot represent, and its errors:
+
+* exact (to the voxel size) for parts whose shape is an intersection of three extrusions
+  (blocks, brackets, plates with through-holes seen along an axis); concavities that no view
+  shows (blind pockets, recesses, anything only visible obliquely) are filled in, so volume and
+  stiffness are over-estimated there;
+* perspective: a phone photo is not orthographic. A magnification common to a whole photo
+  cancels (each photo's bounding box is rescaled, the typed dimension fixes the scale), so a
+  box comes out exact from any distance. Parts of one photo at different depths are
+  magnified differently, by a relative ~ (depth difference) / d at camera distance d.
+  Measured on an 80 x 30 x 50 mm L-bracket: d = 5x its size: extents <= 6 %, volume +7 %,
+  the 10 mm upright 12.5 mm thick; d = 10x: <= 3 %, +4 %. Shoot from far, zoomed in;
+* tilt: a view turned by theta from its axis adds about D sin(theta) of the depth to the width;
+* checking: the only reliable consistency check is the bounding-box proportions
+  (``size_mismatch``): an extra object or a hand in one photo changes its proportions.
+  Silhouette agreement (projecting the hull back into each photo) is *not* used: with three
+  orthogonal views the hull reproduces a view almost whenever the other two are solid
+  outlines, so a mirrored photo or a hand inside the outline usually still "agrees";
+* discretisation: the hull is carved on a voxel grid (``resolution`` voxels along the longest
+  side) and surfaced by marching cubes on a slightly smoothed occupancy: O(voxel) boundary error.
+
+The FE mesh uses the app's convention, y up: ``(X, Y, Z) = (x, z, -y)``, table at Y = 0.
 ```
 
-### class `HullView`  _(@dataclass)_
+### class `OrthoView`  _(@dataclass)_
 
-One photo: its name, the part's silhouette (H, W) and the camera that took it.
+One photo: which view it is, the part's silhouette (H, W) and how to orient it.
 
-Fields: `name: str`, `mask: np.ndarray`, `pose: CameraPose`
+``rot90`` quarter turns counter-clockwise, then ``flip_h`` mirrors left-right; both fix a
+photo taken in portrait or from the wrong side without retaking it.
+
+Fields: `name: str`, `mask: np.ndarray`, `axis: str`, `flip_h: bool = False`, `rot90: int = 0`
+
+#### `OrthoView.oriented() -> np.ndarray`
+
+The mask after rotation and mirroring.
 
 ### class `Hull`  _(@dataclass)_
 
-Carved occupancy grid in the mat frame (voxel centres at origin + (i, j, k) * voxel).
+Carved occupancy grid (voxel centres at origin + (i, j, k) * voxel), hull frame.
 
-Fields: `occupied: np.ndarray`, `origin: np.ndarray`, `voxel: float`, `view_iou: Dict[str, float] = field(default_factory=dict)`
+Fields: `occupied: np.ndarray`, `origin: np.ndarray`, `voxel: float`, `size_mismatch: Optional[float] = None`
 
 #### `Hull.volume() -> float`  _(@property)_
 
@@ -878,31 +842,35 @@ Carved volume (m^3), voxel-counted.
 
 Bounding-box size (m) of the occupied voxels, centre to centre plus one voxel.
 
-### `carve(views: List[HullView], resolution: int=128, search_box=None) -> Hull`
+### `crop_part(mask: np.ndarray) -> np.ndarray`
 
-Visual hull of the part above the mat (z >= 0).
+Largest connected component of ``mask``, cropped to its bounding box.
 
-A coarse pass (48 voxels over ``search_box``) finds the part; a fine pass puts
-``resolution`` voxels across its largest extent. ``search_box`` = (lo, hi) in the mat
-frame; default: the area around the cameras' common view, z from 0 up.
+### `fit_scales(views: List[OrthoView], known_axis: str, known_m: float)`
 
-### `view_consistency(views: List[HullView], hull: Hull) -> Dict[str, float]`
+Part size (m, along x, y, z) and each photo's scale (m/px) from the bounding boxes.
 
-IoU between each view's mask and the hull projected back into that view.
+Each world axis spans ``n_a`` pixels in the two photos that see it, so their scales k
+satisfy ``k_i n_i = k_j n_j``: three equations for three unknowns, one of which is the common
+factor fixed by ``known_m`` (the true size along ``known_axis``). In logs the equations
+form a cycle; least squares spreads its closure residual r equally over the three, and
+``|e^r - 1|`` (returned as ``mismatch``) is how much the three photos disagree about the
+proportions: 0 for perfect orthographic silhouettes; perspective, tilt or a wrong
+selection make it grow.
 
-The hull is the intersection of all silhouette cones, so it can only *shrink* a correct
-mask. A view whose mask is much larger than the reprojection (IoU well below 1) shows
-something the other views rule out: usually the wrong object or a merged hand.
+### `carve_ortho(views: List[OrthoView], known_axis: str='x', known_m: float=0.1, resolution: int=128) -> Hull`
 
-### `project_hull(hull: Hull, pose: CameraPose) -> np.ndarray`
+Intersection of the three extruded silhouettes; ``resolution`` voxels on the longest side.
 
-(H, W) bool silhouette of the carved hull as seen by ``pose``.
+Each silhouette's bounding box is stretched onto the common size from :func:`fit_scales`
+(that registers the photos); ``size_mismatch`` reports how well the boxes agreed.
 
 ### `surface(hull: Hull, smooth_voxels: float=1.0, step: int=1) -> Tuple[np.ndarray, np.ndarray]`
 
-Closed triangle surface (vertices in the mat frame, faces) by marching cubes.
+Closed triangle surface (vertices in the hull frame, faces) by marching cubes.
 
-``step`` > 1 samples every step-th voxel: fewer, larger triangles (and tets).
+``step`` > 1 samples every step-th voxel: fewer, larger triangles. Gmsh could not fill such
+surfaces at steps 3-4; for coarser meshes carve at a lower resolution instead.
 
 ### `name_faces_by_normal(mesh, max_dev_deg: float=35.0, min_area_frac: float=0.01) -> Dict[str, np.ndarray]`
 
@@ -922,16 +890,16 @@ Tetrahedral MeshTet (app frame, y up, table at Y = 0) inside a closed triangle s
 The marching-cubes triangles are kept as the boundary (a watertight, non-self-intersecting
 surface) and Gmsh fills the volume. Re-meshing the surface through Gmsh's
 classify/reparametrise step was tried first and failed on a real session ("a segment and a
-facet intersect"); element size is set by the marching-cubes ``step`` instead (see
+facet intersect"); element size is set by the carving resolution instead (see
 :func:`load_hull_mesh`). Faces are named by :func:`name_faces_by_normal`.
 
-### `save_session(directory: Union[str, Path], views: List[HullView]) -> Path`
+### `save_session(directory: Union[str, Path], views: List[OrthoView], known_axis: str, known_m: float) -> Path`
 
-Write masks (PNG) and cameras (JSON) so ``mesh hull DIR`` can rebuild the solid.
+Write masks (PNG) and ``ortho.json`` so ``mesh hull DIR`` can rebuild the solid.
 
-### `load_session(directory: Union[str, Path]) -> List[HullView]`
+### `load_session(directory: Union[str, Path])`
 
-Views saved by :func:`save_session`.
+(views, known_axis, known_m) saved by :func:`save_session`.
 
 ### `load_hull_mesh(directory: Union[str, Path], mesh_size: Optional[float]=None, resolution: int=128)`
 
@@ -982,10 +950,11 @@ Render a compact escaped 3x3 matrix.
 
 Results -> things to draw. The array helpers are pure numpy; to_pyvista needs pyvista + meshio.
 
-### `compute_scalars(res) -> dict`
+### `compute_scalars(res, material=None) -> dict`
 
-name -> (nodal array (nnodes,), kind) with kind in {'disp', 'stress', 'strain'}.
-`res` needs u_nodal (3, n), sig_nodal (3, 3, n), eps_nodal (3, 3, n).
+name -> (nodal array (nnodes,), kind) with kind in {'disp', 'stress', 'strain', 'ratio'}.
+`res` needs u_nodal (3, n), sig_nodal (3, 3, n), eps_nodal (3, 3, n). With a ``material``
+that has a proportional limit, the dimensionless :data:`UTILISATION` field is added.
 
 ### `suggest_scale(points, u_nodal) -> float`
 

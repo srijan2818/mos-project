@@ -15,9 +15,13 @@ STRESS_UNITS = {"Pa": 1.0, "kPa": 1e3, "MPa": 1e6, "GPa": 1e9}
 
 # ------------------------------------------------------------------ scalar helpers
 
-def compute_scalars(res) -> dict:
-    """name -> (nodal array (nnodes,), kind) with kind in {'disp', 'stress', 'strain'}.
-    `res` needs u_nodal (3, n), sig_nodal (3, 3, n), eps_nodal (3, 3, n)."""
+UTILISATION = "Utilisation (σ/σ_pl)"
+
+
+def compute_scalars(res, material=None) -> dict:
+    """name -> (nodal array (nnodes,), kind) with kind in {'disp', 'stress', 'strain', 'ratio'}.
+    `res` needs u_nodal (3, n), sig_nodal (3, 3, n), eps_nodal (3, 3, n). With a ``material``
+    that has a proportional limit, the dimensionless :data:`UTILISATION` field is added."""
     u, S, E = res.u_nodal, res.sig_nodal, res.eps_nodal
     s, _ = post.principal(S)
     e, _ = post.principal(E)
@@ -35,6 +39,8 @@ def compute_scalars(res) -> dict:
     for name, (i, j) in {"γxy": (0, 1), "γyz": (1, 2), "γxz": (0, 2)}.items():
         out[name] = (2 * E[i, j], "strain")          # engineering shear strain
     out["ε1 (max principal)"] = (e[0], "strain")
+    if material is not None and material.sigma_pl is not None:
+        out[UTILISATION] = (post.utilisation(S, material.sigma_pl, material.sigma_pl_c), "ratio")
     return out
 
 

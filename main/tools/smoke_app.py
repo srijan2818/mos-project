@@ -99,6 +99,7 @@ def make_fake_app(spec_path=None):
     plotter = MagicMock()
     pv = types.ModuleType("pyvista")
     pv.Plotter, pv.OFF_SCREEN = (lambda: plotter), False
+    pv.PolyData = MagicMock()   # proportional-limit markers
     sys.modules.update({
         "pyvista": pv, "trame_pyvista": MagicMock(), "trame_pyvista.ui": MagicMock(),
         "trame": MagicMock(), "trame.app": MagicMock(get_server=lambda **k: server),

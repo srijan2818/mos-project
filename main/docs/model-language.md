@@ -34,12 +34,12 @@ mesh hull SESSION_DIR [mesh_size]
 `nz` cells in each direction (positive integers). `tet` (default) splits each cell into
 tetrahedra; `hex` keeps hexahedra. Numbers may be expressions without spaces (`L/2`).
 
-`hull` rebuilds a solid from a multi-view photo session (masks + marker-mat camera poses written
-by the app's three-view capture; see [image-reconstruction.md](image-reconstruction.md)): visual hull
-carving, marching cubes, then a Gmsh tetrahedral mesh in metres with y up and the table at y = 0.
-Faces are named `cad_face_N` by grouping boundary triangles with similar normals (largest first).
-The hull is the largest solid consistent with every silhouette: concavities that no photo shows are
-filled in.
+`hull` rebuilds a solid from a three-photo session (front, top and right-side outlines, their
+orientation and one measured dimension, written by the app's *3-photo solid* panel; see
+[image-reconstruction.md](image-reconstruction.md)): the intersection of the three extruded
+outlines on a voxel grid, marching cubes, then a Gmsh tetrahedral mesh in metres with y up and the
+table at y = 0. Faces are named `cad_face_N` by grouping boundary triangles with similar normals
+(largest first). Concavities that no photo shows are filled in.
 
 `step` imports a general CAD STEP file (`.step` or `.stp`) using Gmsh (OpenCASCADE) and generates a 3D
 tetrahedral volume mesh. Each boundary CAD surface is automatically tagged as a named boundary
@@ -64,10 +64,16 @@ elements (see [theory.md](theory.md)).
 
 ```text
 material E = 210e9, nu = 0.3, rho = 7850
+material E = 210e9, nu = 0.3, rho = 7850, sigma_pl = 250e6
+material E = 30e9, nu = 0.2, rho = 2400, sigma_pl = 3e6, sigma_pl_c = 12e6
 ```
 
 Isotropic. `E` and `nu` are required, `rho` (default 0) is only needed for self-weight-type
-loads. Afterwards `E`, `nu` and `rho` are also available as params in expressions.
+loads. The optional proportional limits (Pa, positive) switch on the check after each solve:
+`sigma_pl` alone is compared with von Mises (ductile); `sigma_pl` together with `sigma_pl_c` are
+the tension and compression limits of the brittle Coulomb–Mohr check (see
+[theory.md](theory.md), "Proportional-limit check"). Afterwards `E`, `nu`, `rho` and the given
+limits are also available as params in expressions.
 
 ### `region`
 

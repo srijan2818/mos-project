@@ -140,12 +140,17 @@ remove all six rigid modes; insufficient supports are rejected rather than silen
 * At every quadrature point: `eps = sym(grad u)`, `sigma = C : eps` (`Results.eps_q`, `sig_q`,
   shape `(3, 3, cells, points)`). These are the raw results.
 * **Cell values**: quadrature-weighted average per cell (`eps_cell`, `sig_cell`).
-* **Nodal values** (`eps_nodal`, `sig_nodal`, used for plotting): the volume-weighted average of
-  the cell values of all cells touching a vertex.
+* **Nodal values** (`eps_nodal`, `sig_nodal`, used for plotting and the proportional-limit
+  check): each element's strain/stress is evaluated **at its own vertices** (exact inside the
+  element: linear for P2 tets, bilinear-type for Q2 hexes), then the values from all elements
+  sharing a vertex are volume-weighted averaged (`post.vertex_values`, `post.vertex_average`).
 
-The nodal field is smooth and cheap but it is an average, so it **smears and underestimates
-peaks** at stress concentrations and does not honour traction-free surfaces exactly. For a peak
-value, refine the mesh and watch it converge, or read `sig_q`.
+Measured on the 20 × 2 × 2 cantilever (L/H = 10, tip shear), mid-span surface `sigma_xx` vs
+`M y / I`: P2 tets +0.8 %, Q2 hexes exact to round-off. Averaging cell means instead (the earlier
+method) gave −39 % / −50 %: on a mesh two elements deep a cell mean sits a quarter of the depth
+inside the surface. The averaged field is still smooth across elements and does not honour
+traction-free surfaces exactly; at real stress concentrations refine the mesh and watch the peak
+converge, or read `sig_q`.
 
 ## 8. Derived quantities
 
@@ -158,6 +163,43 @@ Tresca     = s1 - s3
 
 Uniaxial stress `s` gives von Mises `= |s|`; pure shear `tau` gives von Mises `= sqrt(3) tau` and
 principal values `(tau, 0, -tau)`. The same eigen-decomposition gives principal strains.
+
+### Proportional-limit check
+
+Everything above is linear elasticity, which only holds while the material stays below its
+proportional limit. With `sigma_pl` set on the material (`material ..., sigma_pl = ...`, or the
+app's material panel) every solve computes a utilisation `U` per node from the nodal stresses
+(`post.utilisation`) and flags nodes with `U >= 1`:
+
+```text
+ductile (sigma_pl only)            U = von Mises / sigma_pl
+brittle (sigma_pl = St, sigma_pl_c = Sc), Coulomb-Mohr:
+                                   U = max(s1, 0) / St + max(-s3, 0) / Sc
+```
+
+The Coulomb-Mohr form is `s1/St` in pure tension, `-s3/Sc` in pure compression and
+`s1/St - s3/Sc` in mixed states; pure shear (torsion) reaches the limit at
+`tau = St Sc / (St + Sc)` (von Mises: `tau = sigma_pl / sqrt(3)`), so tension, compression,
+torsion and any combination are covered by one number. Checking `sigma_xx` against a tension limit
+instead would depend on the axes, and checking max/min principal separately (Rankine) allows
+`tau = St` in torsion: unconservative for brittle materials.
+
+Both criteria are positively homogeneous of degree 1 in the stress, and the solve is linear, so
+`U` scales with the loads: the linear result is valid up to exactly `1 / max(U)` times the applied
+loads (tested to round-off). Beyond it the solution is not physical (plastic flow, cracking).
+Stress singularities at clamped edges, re-entrant corners and point loads grow with mesh
+refinement, so a flagged node there may be a modelling artefact rather than real yielding.
+
+Preset limits (app `MATERIAL_PRESETS`). Published *proportional* limits are scarce, so specified
+minima are used as stand-ins; enter test data where it matters.
+
+| Preset | Check | Limit(s), MPa | Basis |
+|---|---|---|---|
+| Steel | von Mises | 250 | ASTM A36 minimum yield Fy = 36 ksi; for structural steel the proportional limit, elastic limit and yield are treated as one point |
+| Aluminum | von Mises | 240 | 6061-T6 minimum 0.2 % offset yield (typical 276); the true proportional limit of Al alloys is somewhat lower |
+| Titanium | von Mises | 825 | Ti-6Al-4V annealed minimum 0.2 % offset yield (AMS 4911 / ASTM B265 ~825–828); true proportional limit lower |
+| Concrete | Coulomb–Mohr | St 3, Sc 12 | f′c = 30 MPa: tension ≈ 0.1 f′c (cracking), compression ≈ 0.4 f′c (end of the near-linear range, Eurocode 2 practice) |
+| CastIron | Coulomb–Mohr | St 214, Sc 752 | gray iron ASTM A48 class 30 tensile / compressive *strengths*: gray iron has no linear range in tension, so this is a fracture check, not end-of-linearity |
 
 ## 9. Reference solutions used by the benchmarks
 

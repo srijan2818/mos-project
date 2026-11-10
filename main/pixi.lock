@@ -139,7 +139,6 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/b4/76/a10d9fb5d9a0e46d5f95e5520bd1b2d8ad22a9c0a09d2f8c20c5ee842a96/nvidia_cuda_cupti-13.2.86-py3-none-manylinux_2_25_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/bc/46/3a9700cc13f30c9279af9a862363535c814fa27597199b21fd93cad66237/nvidia_cusparse-12.7.10.12-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/c2/03/0fe8dc08e063a85e5ec492baa827d1bc1fbea45cdbe54fe1899296d9da96/scooby-0.12.1-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/c3/87/3a803f04a28d0161fd9f5e085595507d7008d760ba95be6afa5760a41bbf/opencv_contrib_python_headless-5.0.0.93-cp37-abi3-manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/c4/7f/dc3b12c0cde2523b72cea905e0fc421e50a4f5d0decea73175969c9f60e0/trame_client-4.1.4-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/c7/06/519a5ebb48b6f94beb48396e55c905f12246a25c3a3608a7ec7bceabf50e/propcache-0.5.4-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/c8/f1/d9b1119bad9c3018b2cc801032447e0f5cf942859845a1eaf03aff9c0905/trame_vtk-2.11.17-py3-none-any.whl
@@ -265,7 +264,6 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/f2/88/d8cece46725d7879aee3b6a047cbbb86e54aa51b31c707c7d8da6bffa331/pyobjc_framework_cocoa-13.0-cp311-cp311-macosx_10_9_universal2.whl
       - pypi: https://files.pythonhosted.org/packages/f7/30/d6ee48a182e09ca6d66f2e48e91ac7c3efbc5f323d6a50c591a2b4f27840/trame_server-4.1.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/fb/76/641ae371508676492379f16e2fa48f4e2c11741bd63c48be4b12a6b09cba/aiosignal-1.4.0-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/fd/85/da534b90d99a040fbdccc6eb2c3d1c6c6d0e1f7d54732f4ce7d2e1726b29/opencv_contrib_python_headless-5.0.0.93.tar.gz
       - pypi: https://files.pythonhosted.org/packages/ff/bb/cc0b27a3000ddcf4903d3a26983c8b4c9a36050bbaf05675f353e8bcb08c/transformers-5.22.2-py3-none-any.whl
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.10.23-hbd8a1cb_0.conda
@@ -314,7 +312,6 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/43/e3/7d92a15f894aa0c9c4b49b8ee9ac9850d6e63b03c9c32c0367a13ae62209/mpmath-1.3.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/49/d3/b8441a820a491ddfc024b0b0cf0393375b75ea13866d9c66727e54c2fc80/typing_extensions-4.16.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/4c/a8/137edd4bd17081244dbafd3ebcb35612d791b605eaf9a0c57e47200abd24/trame-4.0.0-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/50/b9/2a3a9e23d7894f816792f93f2e73c017765a29e854ba343cb260da400a7e/opencv_contrib_python_headless-5.0.0.93-cp37-abi3-macosx_13_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/51/39/1f5d8c8877a0fa327db959c19341d4be61660de1ab6b7391f9eb805bcd67/pytest-9.2.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/51/e9/3a7820be2bb0fe53b6bc9c3be26d3d1158004e4c3ab953aa6840b955b1e9/truststore-0.10.5-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/56/3c/fc87d06bdfc99b302f4379f0eb34bb8695b6ecd90b965652d0a3195d1acd/msgpack-1.2.4-cp311-cp311-macosx_11_0_arm64.whl
@@ -449,7 +446,6 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/97/4d/2c76a992b370ff77d0b5219275779f8c9a7dabb8ee649deb265dfed84d0f/hf_xet-1.8.0-cp38-abi3-win_amd64.whl
       - pypi: https://files.pythonhosted.org/packages/98/4b/9bd370b004b5c9d8045c6c33cf65bae018b27aca550a3f657cdc99acdbd8/contourpy-1.3.3-cp311-cp311-win_amd64.whl
       - pypi: https://files.pythonhosted.org/packages/9e/c9/b2622292ea83fbb4ec318f5b9ab867d0a28ab43c5717bb85b0a5f6b3b0a4/networkx-3.6.1-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/9e/f3/6d7a7e512d88df0358c09c36cfac1a9050c50df547c64d32dc5f82fade49/opencv_contrib_python_headless-5.0.0.93-cp37-abi3-win_amd64.whl
       - pypi: https://files.pythonhosted.org/packages/a0/f4/c67b0b3f1b9245e8d266f0f112c500d50e5b4e83cb6f3b71b6528104182a/requests-2.34.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/a2/09/77d55d46fd61b4a135c444fc97158ef34a095e5681d0a6c10b75bf356191/sympy-1.14.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/a5/d1/c0bbb1ee6c46906cac7495a5c4eecbf41ae74b7973c287e19a6ed68abf9a/wslink-2.6.0-py3-none-any.whl
@@ -2448,14 +2444,6 @@ packages:
   requires_dist:
   - nvidia-cuda-cccl
   requires_python: '>=3'
-- pypi: https://files.pythonhosted.org/packages/50/b9/2a3a9e23d7894f816792f93f2e73c017765a29e854ba343cb260da400a7e/opencv_contrib_python_headless-5.0.0.93-cp37-abi3-macosx_13_0_arm64.whl
-  name: opencv-contrib-python-headless
-  version: 5.0.0.93
-  sha256: bf1e2b3c502b4fbe7b06e307bd15c4e7bea7da8895de19c189db01d53062f997
-  requires_dist:
-  - numpy<2.0 ; python_full_version < '3.9'
-  - numpy>=2 ; python_full_version >= '3.9'
-  requires_python: '>=3.6'
 - pypi: https://files.pythonhosted.org/packages/51/39/1f5d8c8877a0fa327db959c19341d4be61660de1ab6b7391f9eb805bcd67/pytest-9.2.0-py3-none-any.whl
   name: pytest
   version: 9.2.0
@@ -3404,14 +3392,6 @@ packages:
   - pytest-mpl ; extra == 'test-extras'
   - pytest-randomly ; extra == 'test-extras'
   requires_python: '>=3.11,!=3.14.1'
-- pypi: https://files.pythonhosted.org/packages/9e/f3/6d7a7e512d88df0358c09c36cfac1a9050c50df547c64d32dc5f82fade49/opencv_contrib_python_headless-5.0.0.93-cp37-abi3-win_amd64.whl
-  name: opencv-contrib-python-headless
-  version: 5.0.0.93
-  sha256: 72605e3ae78f66592705b1abe62e60f57dd9050787fdd99711b85a02760d5259
-  requires_dist:
-  - numpy<2.0 ; python_full_version < '3.9'
-  - numpy>=2 ; python_full_version >= '3.9'
-  requires_python: '>=3.6'
 - pypi: https://files.pythonhosted.org/packages/a0/f4/c67b0b3f1b9245e8d266f0f112c500d50e5b4e83cb6f3b71b6528104182a/requests-2.34.2-py3-none-any.whl
   name: requests
   version: 2.34.2
@@ -3752,14 +3732,6 @@ packages:
   - mkl ; sys_platform != 'darwin' and extra == 'cpu'
   - psutil ; extra == 'cpu'
   requires_python: '>=3.10'
-- pypi: https://files.pythonhosted.org/packages/c3/87/3a803f04a28d0161fd9f5e085595507d7008d760ba95be6afa5760a41bbf/opencv_contrib_python_headless-5.0.0.93-cp37-abi3-manylinux_2_28_x86_64.whl
-  name: opencv-contrib-python-headless
-  version: 5.0.0.93
-  sha256: 63ddadd47e36fbc903d5ac141d5c90bd305a8044188dd4936a73de80007c9e6c
-  requires_dist:
-  - numpy<2.0 ; python_full_version < '3.9'
-  - numpy>=2 ; python_full_version >= '3.9'
-  requires_python: '>=3.6'
 - pypi: https://files.pythonhosted.org/packages/c4/7f/dc3b12c0cde2523b72cea905e0fc421e50a4f5d0decea73175969c9f60e0/trame_client-4.1.4-py3-none-any.whl
   name: trame-client
   version: 4.1.4
@@ -4496,14 +4468,6 @@ packages:
   - frozenlist>=1.1.0
   - typing-extensions>=4.2 ; python_full_version < '3.13'
   requires_python: '>=3.9'
-- pypi: https://files.pythonhosted.org/packages/fd/85/da534b90d99a040fbdccc6eb2c3d1c6c6d0e1f7d54732f4ce7d2e1726b29/opencv_contrib_python_headless-5.0.0.93.tar.gz
-  name: opencv-contrib-python-headless
-  version: 5.0.0.93
-  sha256: 6a8c34de905f59b038f6ab0475e73fb0a0f345c3582ec3aeaeb1c0912e80cddb
-  requires_dist:
-  - numpy<2.0 ; python_full_version < '3.9'
-  - numpy>=2 ; python_full_version >= '3.9'
-  requires_python: '>=3.6'
 - pypi: https://files.pythonhosted.org/packages/ff/bb/cc0b27a3000ddcf4903d3a26983c8b4c9a36050bbaf05675f353e8bcb08c/transformers-5.22.2-py3-none-any.whl
   name: transformers
   version: 5.22.2

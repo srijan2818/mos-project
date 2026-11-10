@@ -63,7 +63,8 @@ opens the Lab as a dock over the right side of the 3D view; **Analysis workspace
 | **Deformation scale** | multiplies the displacement drawn. Defaults to **1:1 (True Scale)**. Quick presets allow switching instantly between `1:1 True`, `Auto (~10%)` and `0 Undeformed`. A faint outline of the undeformed shape is drawn whenever the scale is above 0. |
 | **Interactive Loads** | select faces or specify points on the body, then click to apply moments about an axis of your choice or forces with real-time 3D highlight and glyph indicators. A clicked point stays where you clicked; pressure always acts on a face. |
 | **Supports** | Fixed (X, Y, Z), three rollers (one free direction), and Fix X / Y / Z only. A symmetry plane normal to an axis fixes only that component. Solid elements have no rotational DOFs, so a "pinned" face is the same as a fixed one. Changing the geometry source removes supports/loads that named the previous model's `cad_face_N` faces (the status says so). |
-| **Material preset** | fills E, nu and rho; *Custom* keeps the values you typed. |
+| **Material preset** | fills E, nu, rho and the proportional limit(s); *Custom* keeps the values you typed. |
+| **Proportional limit σ_pl (MPa)** | blank = no check. With a value, every solve flags nodes whose von Mises stress reaches it. Tick **Brittle (Coulomb–Mohr)** to enter separate tension and compression limits (concrete, cast iron). Flagged nodes are circled in red, the legend counts them, and a dialog says the linear FEM result is not valid beyond this point and up to which load factor (1 / max utilisation) it holds. The field *Utilisation (σ/σ_pl)* plots the ratio. See [theory.md](theory.md). |
 | **Mesh edges** | draws the element edges |
 | **Load glyphs** | draws 3D arrows and moment indicators representing applied forces and moments |
 | **Section plane normal / position** | cuts the body with a plane normal to x, y or z at a fraction of the bounding box. The colour range stays that of the whole body. |
@@ -88,10 +89,11 @@ The interactive builder includes a dedicated **Photo (CV)** under Geometry Sourc
    with shift-click, mark the hand or background. **Smaller / Larger** steps through SAM's nested
    masks (a face, the part, part + surroundings); **Clear clicks** returns to the guess. Nothing is
    meshed until you press **Accept mask**; any change needs accepting again.
-4. **Three-view solid on a marker mat** (expansion panel, recommended for real 3D): print the
-   two marker sheets, take the four guided photos, *Check marker mat*, *Select part* + *Accept*
-   in each photo, then *Build solid & solve FEA*. See
-   [image-reconstruction.md](image-reconstruction.md) for the setup and measured accuracy.
+4. **3-photo solid** (expansion panel, recommended for real 3D): take a front, a top and a
+   right-side photo (camera or file), *Select part* + *Accept* in each, check each photo's
+   oriented outline against the axes shown (use *Flip* / *Rotate 90°* if needed), enter one
+   measured dimension, then *Build solid & solve FEA*. No printed markers. See
+   [image-reconstruction.md](image-reconstruction.md) for the method and measured accuracy.
 5. **Mesh Photo Outline & Solve FEA** (recommended) meshes the measured silhouette itself,
    holes included, as a prism of the entered depth (`mesh mask`). Enter the real largest extent
    and the depth normal to the photo; for an end-on photo of a beam or tube the depth is the

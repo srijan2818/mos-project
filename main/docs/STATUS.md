@@ -4,9 +4,64 @@ Working log for whoever (person or Claude) picks this project up next. Update it
 every work session: move finished items to **Done**, record choices in **Decisions**, and leave
 **Next** as concrete steps.
 
-_Last updated: 2026-11-09_
+_Last updated: 2026-11-10_
 
 ## Done
+
+### 3-photo solid without markers + proportional-limit check (2026-11-10)
+
+Plan: `~/.claude/plans/look-up-fix-object-detection-multiview-3-snappy-lerdorf.md`.
+`pytest -q` **241 tests: 240 passed, 1 flaky** (`test_cv_noisy_harsh_lighting_bracket`, see Next);
+`tools/smoke_app.py`, `gen_api_docs.py --check` and `compileall` pass. Browser-checked with headless
+Chromium against the real server (synthetic photos, screenshots in the session scratchpad).
+
+* **Marker mat removed** (your call): `mos/core/marker.py`, `tests/test_marker.py`, the L-mat /
+  flat-mat / video modes, the sheet PDF, the video helpers in `upload.js`, and the now-unused
+  `exclude` / `prior` hooks of `cv_detector.analyze_image_object` (and their two SAM tests).
+* **3-photo solid** (`mos/core/multiview_hull.py`, rewritten):
+  * Front / top / right-side outlines, each with *Flip* / *Rotate 90°*.
+  * `fit_scales`: per-photo scales from the bounding boxes, with the cycle residual reported as a
+    proportion mismatch (warning above 5 %).
+  * `carve_ortho`: the intersection of the three extrusions.
+  * Sessions are `ortho.json` + masks, still read by `mesh hull DIR`.
+  * App panel "3-photo solid": camera/file per photo, *Select part* / *Accept*, an oriented-outline
+    thumbnail with axis labels, a measured dimension (axis + mm), *Build solid & solve FEA*.
+  * Measured on synthetic silhouettes:
+    * Box: within one voxel at any zoom, and perspective cancels for a box.
+    * L-bracket volume: −0.6 %.
+    * Pinhole at 5× / 10× the part size: extents ≤ 6 % / 3 %, volume +7 % / +4 %.
+    * Bar cantilever: +5 % vs beam theory.
+  * Browser: 60.0 × 40.3 × 30.0 mm for a 60 × 40 × 30 box, solved (17.6k cells).
+* **Hull meshing bug fixed** (found in the browser): at the default element size, marching cubes
+  ran with step 3–4 on the fine grid and Gmsh generated no tetrahedra. It was latent in the old mat
+  flow too. Now the hull is carved at ~2 voxels per element and surfaced at step 1 with 0.5-voxel
+  smoothing.
+* **Stress recovery switched** (your call): each element's stress is evaluated at its own vertices
+  (`post.vertex_values`), then volume-averaged (`post.vertex_average`). Default beam mid-span
+  surface stress: tets −39 % → +0.8 %, hexes −50 % → exact. This applies to plots, Lab and the
+  check.
+* **Proportional limit:**
+  * `Material.sigma_pl` / `sigma_pl_c`; spec `material …, sigma_pl = …, sigma_pl_c = …`.
+  * `post.utilisation`: von Mises / σ_pl, or brittle Coulomb–Mohr max(σ1,0)/St + max(−σ3,0)/Sc.
+  * `viz` field "Utilisation (σ/σ_pl)".
+  * App:
+    * σ_pl input (MPa, blank = off), a *Brittle* toggle with a compression limit, and presets
+      for all five materials.
+    * After every solve, including live-load edits, nodes with U ≥ 1 get red circles (screen-space
+      discs, max 2000 drawn).
+    * A dialog says the linear FEM result is invalid beyond this point and gives the load factor
+      1 / max U; a legend chip and the dock warning appear too.
+  * Browser: Steel default load → none; σ_pl = 1 MPa → 103 nodes, λ = 0.167 (= 1 / 5.98);
+    Concrete → Coulomb–Mohr, 33 nodes, λ = 0.466.
+* **Tests:**
+  * New: `tests/test_limit.py`, hex beam stress, viz utilisation, 4 app limit tests,
+    `tests/test_multiview_hull.py` (14 tests), the app three-photo flow.
+  * Rewritten: `tests/synthetic_views.py`.
+* **Docs:**
+  * Updated: `theory.md` (§7 recovery; proportional-limit check with preset sources),
+    `model-language.md`, `app.md`, `image-reconstruction.md` (3-photo section),
+    `architecture.md`, `testing.md`.
+  * `api.md` regenerated.
 
 ### UI User-Friendliness, Global Operation Cancellation & Universal Packaging (2026-11-09)
 
@@ -26,6 +81,8 @@ _Last updated: 2026-11-09_
 * Verified: 112 passed, 1 skipped in pytest; `tools/smoke_app.py`, `gen_api_docs.py --check`, and `test_docstrings.py` all pass.
 
 ### Three-view solid on an L-shaped marker mat, Step 2 (2026-11-09, night)
+
+_Superseded 2026-11-10: the marker mat and `marker.py` were removed in favour of the 3-photo solid._
 
 `pytest -q` **226 passed**. Installed with your OK: `opencv-contrib-python` 5.0 and
 `scikit-image` 0.26 (numpy unchanged).
@@ -181,19 +238,43 @@ were also driven headlessly against the real trame state, off-screen PyVista and
 
 Nothing is half-edited. Open state of the repository:
 
-* Nothing from these sessions is committed. The project folder was renamed by you to `main/`
-  (was `mos_work_detection_darklab_fix/`); the previously tracked
-  `mos_analysis/mos_work/`, the zips and `prototype-*` folders show as deleted in `git status`
-  (deleted outside these sessions).
+* Nothing from these sessions is committed. The project folder is `main/`; the previously tracked
+  `mos_work/` and the zips show as deleted in `git status` (deleted outside these sessions).
 * Still synchronous on the UI thread (small or rare): drawing → STEP conversion (Gmsh), template-CAD
   generation, PLY inspect/calibrate, the live-load prepare step.
 
 ## Decisions
 
-* **Stress recovery** is unchanged for now (cell means averaged to vertices), *pending your call*.
-  Measured on the default 20×2×2 cantilever: mid-span surface σxx 1.78 vs 3.00 MPa (−41 %),
-  peak von Mises 3.83 vs 6.0 MPa. Evaluating each element's stress at its own vertices, then
-  averaging, gave 3.03 MPa (+0.8 %) on the same mesh. Tip deflection is already within 0.3 %.
+* **Nodal stresses = element-vertex values averaged per vertex** (your call, 2026-11-10). Measured:
+  default beam surface stress +0.8 % (tets), exact (hexes); cell means gave −39 % / −50 %.
+* **Proportional-limit criteria** (your call):
+  * Ductile: von Mises ≥ σ_pl.
+  * Brittle: Coulomb–Mohr U = max(σ1,0)/St + max(−σ3,0)/Sc ≥ 1. It covers tension, compression,
+    torsion and combinations with one number. Rankine allows τ = St in torsion (unconservative);
+    per-axis checks depend on the axes.
+  * Both are degree-1 homogeneous, so the linear result holds up to exactly 1 / max U × the loads.
+* **Preset limits are stand-ins** (published proportional limits are scarce):
+  * Steel: A36 Fy 250 MPa.
+  * 6061-T6: 240 MPa (0.2 % offset minimum).
+  * Ti-6Al-4V annealed: 825 MPa.
+  * Concrete f′c 30: St 3, Sc 12 MPa (0.1 / 0.4 f′c).
+  * Gray iron class 30: St 214, Sc 752 MPa. These are fracture strengths: gray iron has no linear
+    range in tension.
+  * Sources are in `theory.md`.
+* **Marker mat replaced by three orthogonal photos** (your call). Printing sheets was too much effort.
+* **No silhouette-agreement (IoU) check for the 3-photo solid.** Measured: with three orthogonal
+  views the hull reproduces a view almost whenever the other two are solid outlines. A mirrored
+  side photo of a stepped block gives a different, fully consistent solid. The check is the
+  bounding-box proportion mismatch (catches a hand / second object; 66 % in the test), plus the
+  oriented outlines shown for checking by eye.
+* **Perspective model:** a whole-photo magnification cancels, so only depth differences within a
+  photo matter (~Δdepth / distance). The plan's D/(2d) estimate was wrong; a box is exact at any
+  distance.
+* **Hull FE mesh: carve at ~2 voxels per element, marching cubes at step 1, smoothing 0.5 voxel.**
+  Steps 3–4 left Gmsh with no tetrahedra. Smoothing 1 voxel: bar +11 % too soft vs +5 %.
+  Cost: rounded edges can add small extra faces.
+* **Limit markers are screen-space discs drawn by `update_scene`**, not in `S.analysis_actors`: the
+  probe overlay removes those on every redraw (they vanished in the first browser check).
 * **App CSS/JS are served files** (`mos/app/static/`): Vue drops `<style>` inside templates.
   The old font overrides were not revived; they never applied.
 * **`neg_x`/`pos_x`/… are reserved region names** on meshes with named boundaries: they override
@@ -233,42 +314,37 @@ Nothing is half-edited. Open state of the repository:
 
 ## Next
 
-* **In progress (capture modes):**
-  * Done in `mos/app/main.py`: a mode selector in the multi-view panel (`MV_MODES`: `lmat4`,
-    `flat3`, `video`), the backend generalised to N views, and video frames taken in the browser
-    (`upload.js` `recordFrames` / `videoFrames`).
-  * Done: `mvv_auto_select`, which masks the remaining frames guided by the hull of the
-    accepted ones, and video builds that drop frames with agreement < 0.85.
-  * Done: app tests and smoke pass for `lmat4`.
-  * **Not yet done:** tests for `flat3` and `video` (synthetic floor-only rig + frame list), a
-    browser check of both modes, and docs (`image-reconstruction.md`, `app.md`).
-* **Material checks** (asked to look at them too, not started): stress averaging fix (element-vertex
-  recovery: −41 % → +1 % on the default beam), then a yield check / safety factor per material
-  preset.
-0. **Benchmark on real parts (Step 0):** print the sheets, photograph 4–6 parts with caliper
-   dimensions, and record dimension error, agreement and time per stage. Thresholds still untuned
-   on real photos: sheet IoU 0.5, agreement flag 0.85, 70 % SAM-score rule.
-1. **Short-video mode (Step 3):** many frames on the same L-mat; SAM 2 video propagation
-   (`Sam2VideoModel` is installed). Synthetic: video views at 15–30° alone gave height +14 %, so
-   keep a table-level frame.
-2. Mask meshes exceed the 12k-tet budget (95k DOFs, 138 s solve for a 7 cm cube); check the
-   estimate in `image_to_mesh.mesh_from_mask`.
-1. **Decide on stress recovery** (see Decisions): switch `post`/`solver` nodal stresses to
-   element-vertex evaluation + averaging. Expected effect: the default-mesh surface stress error goes
-   from −41 % to about +1 %; `test_fem` stress tolerances and docs/theory.md §6 would need updating.
-2. Validate the CV path on real workshop photos. The tests use synthetic images, and the "trusted
-   classical mask" thresholds (backdrop spread < 30, area 1–85 %) are untuned.
-3. Move the remaining UI-thread Gmsh jobs (drawing → STEP, template CAD) onto `_spawn` like `run_solve`.
-4. Optional: install `pyamg` (ask first) for faster CG on large models (a 41k-DOF box takes 32 s with Jacobi-CG).
-5. Optional: a *revolve* mode in `image_to_mesh` for axisymmetric parts photographed side-on
+1. **Real-photo benchmark of the 3-photo solid:** 4–6 parts with caliper dimensions, phone at ~5×
+   and ~10× the part size. Record the dimension error, proportion mismatch and time per stage.
+   Still untuned on real photos: the 5 % mismatch warning, the 70 % SAM-score rule, lens
+   distortion and tilt.
+2. **Flaky test:** `tests/test_cv_detector.py::test_cv_noisy_harsh_lighting_bracket` uses unseeded
+   `np.random` noise. It failed once in a full run and passed alone and with the CV files. Seed it
+   (`np.random.default_rng(0)`) after checking the seeded case still passes.
+3. **Dependency to drop (ask first):** `opencv-contrib-python-headless` in `pixi.toml` was only
+   needed by the deleted `marker.py`. No module imports `cv2` now. It is also installed in the FEM
+   env.
+4. Mask meshes exceed the 12k-tet budget (95k DOFs, 138 s solve for a 7 cm cube); check the
+   estimate in `image_to_mesh.mesh_from_mask`. Hull meshes at the default size are ~13–18k tets.
+5. Validate the single-photo CV path on real workshop photos. The "trusted classical mask"
+   thresholds (backdrop spread < 30, area 1–85 %) are untuned.
+6. Move the remaining UI-thread Gmsh jobs (drawing → STEP, template CAD) onto `_spawn` like
+   `run_solve`.
+7. Optional: install `pyamg` (ask first) for faster CG on large models (a 41k-DOF box takes 32 s
+   with Jacobi-CG).
+8. Optional: a *revolve* mode in `image_to_mesh` for axisymmetric parts photographed side-on
    (shafts currently extrude to a flat bar).
-6. Open question: how should the repository be laid out? Commit `main/`
-   as the project root and drop the deleted copies?
-7. Start sessions **in `main/`**, and run the app and tests from there (`python -m mos.app --server`); from the repo
-   root, CLAUDE.md and this file are not loaded.
-8. Housekeeping: delete the stray files `~/=2.0`, `~/=4.45`, `~/=8` (left by an unquoted
-   `pip install torch>=2.0`).
-9. Browser checks: Playwright's Chromium is in `~/.cache/ms-playwright`, but WSL lacks
-   libnss3/libnspr4/libasound2. Either `sudo apt-get install libnss3 libnspr4 libasound2t64` in a real
-   terminal, or unpack them with `apt-get download` + `dpkg -x` and set `LD_LIBRARY_PATH` (what this
-   session did). The Playwright MCP plugin expects Google Chrome at `/opt/google/chrome`.
+9. Open question: how should the repository be laid out? Commit `main/` as the project root and
+   drop the deleted copies?
+10. Start sessions **in `main/`**, and run the app and tests from there
+    (`python -m mos.app --server`); from the repo root, CLAUDE.md and this file are not loaded.
+    `main/CLAUDE.md` line 11 still names the folder `mos_work_detection_darklab_fix/`.
+11. Housekeeping: delete the stray files `~/=2.0`, `~/=4.45`, `~/=8` (left by an unquoted
+    `pip install torch>=2.0`).
+12. **Browser checks without installing anything:** use `playwright-core` from
+    `~/.npm/_npx/e41f203b7505f1fb/node_modules/playwright-core` with
+    `~/.cache/ms-playwright/chromium_headless_shell-1254/.../chrome-headless-shell` as
+    `executablePath`. Unpack libnss3 / libnspr4 / libasound2t64 with `apt-get download` +
+    `dpkg -x` into the scratchpad and set `LD_LIBRARY_PATH`. The Playwright MCP plugin fails: it
+    expects Google Chrome at `/opt/google/chrome`. The trame state is shared by all clients, so
+    restart the server between scripted runs.

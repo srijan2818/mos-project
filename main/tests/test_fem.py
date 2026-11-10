@@ -125,8 +125,21 @@ def test_bending_stress_at_midspan(beam):
     res = solve_case(model, LoadCase("tip", [Traction(tip, [0, -P / (H * W), 0])]))
     top_mid = nodes_where(model.mesh, lambda x, y, z: np.isclose(x, L / 2) & np.isclose(y, H / 2), "m")
     sigma = res.sig_nodal[0, 0, top_mid.ids].mean()
-    # Nodal averaging from cell centroids on a coarse 2-element-high mesh underestimates surface peak
-    assert sigma == pytest.approx(P * (L / 2) * (H / 2) / I, rel=0.40)   # M y / I
+    # Element-vertex recovery on the coarse 2-element-high P2 mesh: measured +0.8 %
+    # (cell means averaged to vertices gave -39 %).
+    assert sigma == pytest.approx(P * (L / 2) * (H / 2) / I, rel=0.02)   # M y / I
+
+
+def test_bending_stress_at_midspan_hex():
+    mesh = box_mesh(L, H, W, 20, 2, 2, "hex")
+    fixed = facets_where(mesh, lambda x, y, z: np.isclose(x, 0), "fixed")
+    tip = facets_where(mesh, lambda x, y, z: np.isclose(x, L), "tip")
+    P = 1e6
+    res = solve_case(Model(mesh, Material.isotropic(E, NU, RHO), [BC(fixed)]),
+                     LoadCase("tip", [Traction(tip, [0, -P / (H * W), 0])]))
+    top_mid = nodes_where(mesh, lambda x, y, z: np.isclose(x, L / 2) & np.isclose(y, H / 2), "m")
+    sigma = res.sig_nodal[0, 0, top_mid.ids].mean()
+    assert sigma == pytest.approx(P * (L / 2) * (H / 2) / I, rel=0.01)   # Q2: measured ~1e-9
 
 
 # ---- through the text-spec path (what the app does) -------------------------------------
