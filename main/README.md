@@ -15,6 +15,10 @@ analysed quasi-statically in an accelerating body-fixed frame at an instant of z
 angular velocity, using Newton–Euler acceleration and D’Alembert inertia loads. This
 is not transient dynamics; see [docs/theory.md](docs/theory.md) for the assumptions.
 
+<img width="1200" height="675" alt="Truss Deflection" src="https://github.com/user-attachments/assets/eec55afe-c551-448a-8058-0753dab0fa04" />
+
+<img width="1200" height="675" alt="Cantilever Beam Deflection" src="https://github.com/user-attachments/assets/667d16a5-7ddb-4b82-995d-d331968b8251" />
+
 ```text
 pip install -r requirements.txt
 pytest                       # real FEM/CAD tests skip if scikit-fem/Gmsh are unavailable
